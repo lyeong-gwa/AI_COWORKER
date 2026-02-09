@@ -200,15 +200,24 @@ class ONNXEmbeddingService:
                 dynamic_axes["token_type_ids"] = {0: "batch_size", 1: "sequence_length"}
 
             onnx_file = model_dir / "model.onnx"
-            torch.onnx.export(
-                model,
-                inputs,
-                str(onnx_file),
+            export_kwargs = dict(
                 input_names=input_names,
                 output_names=["last_hidden_state"],
                 dynamic_axes=dynamic_axes,
                 opset_version=14,
                 do_constant_folding=True,
+            )
+
+            # torch 2.4+ dynamo export는 onnxscript 필요 → legacy export 강제
+            import inspect
+            if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+                export_kwargs["dynamo"] = False
+
+            torch.onnx.export(
+                model,
+                inputs,
+                str(onnx_file),
+                **export_kwargs,
             )
             logger.info(f"ONNX 변환 완료 (오프라인): {onnx_file}")
 

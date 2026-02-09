@@ -13,8 +13,7 @@ pytorch_model.bin → model.onnx 변환
     python convert_model.py ./models/onnx/jhgan_ko-sroberta-multitask
 
 참고:
-    torch 2.x+ 에서는 model.onnx + model.onnx.data (외부 가중치) 2개 파일 생성
-    Windows에서는 PYTHONIOENCODING=utf-8 환경변수 설정 필요 (emoji 출력 cp949 오류 방지)
+    Windows에서도 별도 환경변수 없이 실행 가능 (cp949 인코딩 자동 처리)
 """
 
 import sys
@@ -91,15 +90,24 @@ def convert_to_onnx(model_dir: str) -> None:
 
     print(f"[INFO] ONNX 변환 시작...")
 
-    torch.onnx.export(
-        model,
-        inputs,
-        str(onnx_file),
+    export_kwargs = dict(
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
         opset_version=14,
         do_constant_folding=True,
+    )
+
+    # torch 2.4+ dynamo export는 onnxscript 필요 → legacy export 강제
+    import inspect
+    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+        export_kwargs["dynamo"] = False
+
+    torch.onnx.export(
+        model,
+        inputs,
+        str(onnx_file),
+        **export_kwargs,
     )
 
     size_mb = onnx_file.stat().st_size / (1024 * 1024)
