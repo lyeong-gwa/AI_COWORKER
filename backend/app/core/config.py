@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     CHROMA_PERSIST_DIR: str = "./data/chroma"
     CHROMA_COLLECTION_NAME: str = "knowledge_base"
 
-    # 로컬 임베딩 모델 (ONNX)
-    ONNX_MODEL_PATH: str = "./models/onnx/sentence-transformers_all-MiniLM-L6-v2"
+    # 로컬 임베딩 모델 (ONNX Runtime + tokenizers)
+    ONNX_MODEL_PATH: str = "./models/onnx/jhgan_ko-sroberta-multitask"
     MODEL_CACHE_DIR: str = "./models"
 
     # LLM 설정
