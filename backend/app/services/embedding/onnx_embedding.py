@@ -2,17 +2,19 @@
 ONNX Embedding Service
 
 로컬 ONNX 모델을 사용한 텍스트 임베딩 서비스
-sentence-transformers 모델 기반
+PyTorch 없이 onnxruntime + tokenizers만으로 동작
 
-지원 모델:
-- sentence-transformers/all-MiniLM-L6-v2 (기본, 경량)
-- sentence-transformers/all-mpnet-base-v2 (고성능)
-- sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 (다국어)
+필수 패키지:
+    pip install onnxruntime tokenizers numpy
+
+모델 디렉토리 구조:
+    {ONNX_MODEL_PATH}/
+    ├── model.onnx        # ONNX 모델 파일
+    └── tokenizer.json    # HuggingFace 토크나이저
 """
 
-import os
 import numpy as np
-from typing import List, Optional, Union
+from typing import List, Optional
 from pathlib import Path
 import logging
 
@@ -21,10 +23,10 @@ logger = logging.getLogger(__name__)
 
 class ONNXEmbeddingService:
     """
-    ONNX 기반 텍스트 임베딩 서비스
+    ONNX Runtime 기반 텍스트 임베딩 서비스
 
-    완전 오프라인으로 동작하며 외부 API 호출 없이
-    로컬에서 텍스트를 벡터로 변환합니다.
+    PyTorch/sentence-transformers 없이 동작하며
+    onnxruntime + tokenizers만으로 임베딩을 생성합니다.
 
     Example:
         service = ONNXEmbeddingService()
@@ -32,26 +34,21 @@ class ONNXEmbeddingService:
         embeddings = service.embed_batch(["텍스트1", "텍스트2"])
     """
 
-    DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-    EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 차원
+    MAX_LENGTH = 256  # all-MiniLM-L6-v2 기본 max_length
 
     def __init__(
         self,
         model_path: Optional[str] = None,
-        model_name: Optional[str] = None,
-        cache_dir: Optional[str] = None,
     ):
         """
         Args:
-            model_path: 이미 다운로드된 모델 경로 (ONNX_MODEL_PATH 환경변수)
-            model_name: HuggingFace 모델명 (자동 다운로드)
-            cache_dir: 모델 캐시 디렉토리
+            model_path: ONNX 모델 디렉토리 경로 (model.onnx + tokenizer.json)
         """
-        self.model_path = model_path or os.getenv("ONNX_MODEL_PATH")
-        self.model_name = model_name or self.DEFAULT_MODEL
-        self.cache_dir = cache_dir or os.getenv("MODEL_CACHE_DIR", "./models")
+        from ...core.config import settings
 
-        self._model = None
+        self.model_path = model_path or getattr(settings, 'ONNX_MODEL_PATH', None)
+
+        self._session = None
         self._tokenizer = None
         self._initialized = False
 
@@ -60,47 +57,92 @@ class ONNXEmbeddingService:
         if self._initialized:
             return
 
-        # 1. 패키지 import 확인
+        # 1. 패키지 확인
         try:
-            from sentence_transformers import SentenceTransformer
+            import onnxruntime as ort
         except ImportError:
             raise ImportError(
-                "sentence-transformers가 설치되지 않았습니다.\n"
-                "pip install sentence-transformers 로 설치하세요."
+                "onnxruntime이 설치되지 않았습니다.\n"
+                "pip install onnxruntime 로 설치하세요."
             )
 
-        # 2. 모델 로드
         try:
-            if self.model_path and os.path.exists(self.model_path):
-                logger.info(f"로컬 모델 로드: {self.model_path}")
-                self._model = SentenceTransformer(self.model_path)
-            else:
-                logger.info(f"모델 다운로드/로드: {self.model_name}")
-                self._model = SentenceTransformer(
-                    self.model_name,
-                    cache_folder=self.cache_dir,
-                )
+            from tokenizers import Tokenizer
+        except ImportError:
+            raise ImportError(
+                "tokenizers가 설치되지 않았습니다.\n"
+                "pip install tokenizers 로 설치하세요."
+            )
 
-                # 다운로드된 모델 경로 저장
-                if not self.model_path:
-                    model_cache_path = Path(self.cache_dir) / self.model_name.replace("/", "_")
-                    self.model_path = str(model_cache_path)
+        # 2. 모델 경로 확인
+        if not self.model_path:
+            raise ValueError(
+                "ONNX_MODEL_PATH가 설정되지 않았습니다.\n"
+                ".env 파일에 ONNX_MODEL_PATH를 설정하세요.\n"
+                "예: ONNX_MODEL_PATH=./models/onnx/sentence-transformers_all-MiniLM-L6-v2"
+            )
+
+        model_dir = Path(self.model_path)
+        onnx_file = model_dir / "model.onnx"
+        tokenizer_file = model_dir / "tokenizer.json"
+
+        if not onnx_file.exists():
+            raise FileNotFoundError(
+                f"ONNX 모델 파일을 찾을 수 없습니다: {onnx_file}\n"
+                f"모델 디렉토리에 model.onnx 파일이 있는지 확인하세요."
+            )
+
+        if not tokenizer_file.exists():
+            raise FileNotFoundError(
+                f"토크나이저 파일을 찾을 수 없습니다: {tokenizer_file}\n"
+                f"모델 디렉토리에 tokenizer.json 파일이 있는지 확인하세요."
+            )
+
+        # 3. 모델 로드
+        try:
+            self._session = ort.InferenceSession(
+                str(onnx_file),
+                providers=['CPUExecutionProvider'],
+            )
+            self._tokenizer = Tokenizer.from_file(str(tokenizer_file))
+
+            # 토크나이저 max_length 설정
+            self._tokenizer.enable_truncation(max_length=self.MAX_LENGTH)
+            self._tokenizer.enable_padding(length=None)  # 동적 패딩
+
+            # 입력 이름 확인
+            self._input_names = [inp.name for inp in self._session.get_inputs()]
 
             self._initialized = True
-            logger.info(f"임베딩 서비스 초기화 완료 (차원: {self.embedding_dim})")
+            logger.info(
+                f"ONNX 임베딩 서비스 초기화 완료: {onnx_file} "
+                f"(입력: {self._input_names})"
+            )
 
         except Exception as e:
             raise RuntimeError(
-                f"임베딩 모델 로드 실패: {e}\n"
-                f"모델 경로: {self.model_path}\n"
-                f"의존성 확인: pip install sentence-transformers torch transformers"
+                f"ONNX 모델 로드 실패: {e}\n"
+                f"모델 경로: {self.model_path}"
             )
 
-    @property
-    def embedding_dim(self) -> int:
-        """임베딩 벡터 차원"""
-        self._ensure_initialized()
-        return self._model.get_sentence_embedding_dimension()
+    def _mean_pool_and_normalize(
+        self,
+        token_embeddings: np.ndarray,
+        attention_mask: np.ndarray,
+    ) -> np.ndarray:
+        """Mean Pooling + L2 정규화"""
+        # attention_mask 확장: (batch, seq_len) → (batch, seq_len, hidden_dim)
+        mask = attention_mask[..., np.newaxis].astype(np.float32)
+
+        # 마스크 적용 후 평균
+        masked = token_embeddings * mask
+        summed = masked.sum(axis=1)
+        counted = mask.sum(axis=1).clip(min=1e-9)
+        mean_pooled = summed / counted
+
+        # L2 정규화
+        norm = np.linalg.norm(mean_pooled, axis=1, keepdims=True).clip(min=1e-9)
+        return mean_pooled / norm
 
     def embed(self, text: str) -> List[float]:
         """
@@ -114,13 +156,26 @@ class ONNXEmbeddingService:
         """
         self._ensure_initialized()
 
-        embedding = self._model.encode(
-            text,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
+        # 토크나이즈
+        encoded = self._tokenizer.encode(text)
+        input_ids = np.array([encoded.ids], dtype=np.int64)
+        attention_mask = np.array([encoded.attention_mask], dtype=np.int64)
 
-        return embedding.tolist()
+        # ONNX 입력 구성
+        feeds = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+        if "token_type_ids" in self._input_names:
+            feeds["token_type_ids"] = np.array([encoded.type_ids], dtype=np.int64)
+
+        # 추론
+        outputs = self._session.run(None, feeds)
+        token_embeddings = outputs[0]  # (1, seq_len, hidden_dim)
+
+        # Mean Pooling + 정규화
+        result = self._mean_pool_and_normalize(token_embeddings, attention_mask)
+        return result[0].tolist()
 
     def embed_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
         """
@@ -135,15 +190,51 @@ class ONNXEmbeddingService:
         """
         self._ensure_initialized()
 
-        embeddings = self._model.encode(
-            texts,
-            batch_size=batch_size,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            show_progress_bar=len(texts) > 100,
-        )
+        all_embeddings = []
 
-        return embeddings.tolist()
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i + batch_size]
+
+            # 배치 토크나이즈
+            encoded_batch = self._tokenizer.encode_batch(batch_texts)
+
+            # 패딩된 배치 구성 (가장 긴 시퀀스에 맞춤)
+            max_len = max(len(enc.ids) for enc in encoded_batch)
+
+            input_ids = np.zeros((len(batch_texts), max_len), dtype=np.int64)
+            attention_mask = np.zeros((len(batch_texts), max_len), dtype=np.int64)
+            token_type_ids = np.zeros((len(batch_texts), max_len), dtype=np.int64)
+
+            for j, enc in enumerate(encoded_batch):
+                length = len(enc.ids)
+                input_ids[j, :length] = enc.ids
+                attention_mask[j, :length] = enc.attention_mask
+                token_type_ids[j, :length] = enc.type_ids
+
+            # ONNX 입력 구성
+            feeds = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+            }
+            if "token_type_ids" in self._input_names:
+                feeds["token_type_ids"] = token_type_ids
+
+            # 추론
+            outputs = self._session.run(None, feeds)
+            token_embeddings = outputs[0]  # (batch, seq_len, hidden_dim)
+
+            # Mean Pooling + 정규화
+            batch_result = self._mean_pool_and_normalize(token_embeddings, attention_mask)
+            all_embeddings.extend(batch_result.tolist())
+
+        return all_embeddings
+
+    @property
+    def embedding_dim(self) -> int:
+        """임베딩 벡터 차원"""
+        self._ensure_initialized()
+        output_shape = self._session.get_outputs()[0].shape
+        return output_shape[-1] if output_shape[-1] is not None else 384
 
     async def embed_async(self, text: str) -> List[float]:
         """비동기 단일 임베딩 (스레드 풀 사용)"""
@@ -161,27 +252,10 @@ class ONNXEmbeddingService:
         )
 
     def similarity(self, text1: str, text2: str) -> float:
-        """
-        두 텍스트 간 코사인 유사도
-
-        Args:
-            text1: 첫 번째 텍스트
-            text2: 두 번째 텍스트
-
-        Returns:
-            유사도 점수 (0~1)
-        """
+        """두 텍스트 간 코사인 유사도"""
         emb1 = np.array(self.embed(text1))
         emb2 = np.array(self.embed(text2))
-
-        # 이미 정규화되어 있으므로 내적만 계산
         return float(np.dot(emb1, emb2))
-
-    def save_model(self, path: str) -> None:
-        """모델을 로컬에 저장"""
-        self._ensure_initialized()
-        self._model.save(path)
-        logger.info(f"모델 저장 완료: {path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -38,6 +38,7 @@ env/
 backend/data/
 backend/models/
 backend/server.log
+models/
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Frontend

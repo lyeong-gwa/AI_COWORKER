@@ -21,10 +21,9 @@ redis==5.0.1
 
 # Vector Database & Embeddings
 chromadb==0.4.22
-sentence-transformers==2.2.2
-transformers==4.36.2
-torch==2.1.2
-numpy==1.26.3
+onnxruntime>=1.17.0
+tokenizers>=0.15.0
+numpy>=1.26.0
 
 # LLM Integration
 openai==1.10.0
