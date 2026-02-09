@@ -153,12 +153,14 @@ class ONNXEmbeddingService:
         logger.info(f"model.onnx 없음 → PyTorch 모델에서 자동 변환 시작: {model_dir}")
 
         try:
-            from optimum.onnxruntime import ORTModelForFeatureExtraction
+            import torch
+            from transformers import AutoModel, AutoConfig
         except ImportError:
             raise ImportError(
                 "model.onnx가 없어 PyTorch 모델에서 변환이 필요합니다.\n"
-                "pip install optimum[onnxruntime] torch transformers 로 설치하세요.\n"
-                "변환 완료 후에는 torch 없이도 동작합니다."
+                "pip install torch transformers 로 설치하세요.\n"
+                "변환 완료 후에는 torch 없이도 동작합니다.\n"
+                "또는 별도로 python convert_model.py 를 실행하세요."
             )
 
         # 인터넷 접속 차단 (HuggingFace Hub 다운로드 방지)
@@ -173,18 +175,50 @@ class ONNXEmbeddingService:
             os.environ[key] = val
 
         try:
-            model = ORTModelForFeatureExtraction.from_pretrained(
-                str(model_dir), export=True, local_files_only=True
+            config = AutoConfig.from_pretrained(str(model_dir))
+            model = AutoModel.from_pretrained(str(model_dir), config=config)
+            model.eval()
+
+            # 더미 입력
+            seq_len = 8
+            input_ids = torch.ones(1, seq_len, dtype=torch.long)
+            attention_mask = torch.ones(1, seq_len, dtype=torch.long)
+
+            input_names = ["input_ids", "attention_mask"]
+            dynamic_axes = {
+                "input_ids": {0: "batch_size", 1: "sequence_length"},
+                "attention_mask": {0: "batch_size", 1: "sequence_length"},
+                "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+            }
+            inputs = (input_ids, attention_mask)
+
+            # token_type_ids 지원 여부
+            if hasattr(config, "type_vocab_size") and config.type_vocab_size > 1:
+                token_type_ids = torch.zeros(1, seq_len, dtype=torch.long)
+                inputs = (input_ids, attention_mask, token_type_ids)
+                input_names.append("token_type_ids")
+                dynamic_axes["token_type_ids"] = {0: "batch_size", 1: "sequence_length"}
+
+            onnx_file = model_dir / "model.onnx"
+            torch.onnx.export(
+                model,
+                inputs,
+                str(onnx_file),
+                input_names=input_names,
+                output_names=["last_hidden_state"],
+                dynamic_axes=dynamic_axes,
+                opset_version=14,
+                do_constant_folding=True,
             )
-            model.save_pretrained(str(model_dir))
-            logger.info(f"ONNX 변환 완료 (오프라인): {model_dir / 'model.onnx'}")
+            logger.info(f"ONNX 변환 완료 (오프라인): {onnx_file}")
+
         except Exception as e:
             raise RuntimeError(
                 f"PyTorch → ONNX 변환 실패: {e}\n"
-                f"모델 경로: {model_dir}"
+                f"모델 경로: {model_dir}\n"
+                f"별도로 python convert_model.py 를 실행해보세요."
             )
         finally:
-            # 환경변수 복원
             for key, val in old_env.items():
                 if val is None:
                     os.environ.pop(key, None)
