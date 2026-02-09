@@ -226,7 +226,7 @@ async def search_documents(
         # 벡터 검색
         search_results = await vector_db.search_async(
             query=request.query,
-            top_k=request.top_k,
+            top_k=request.topK,
             where=where_filter,
         )
 
@@ -254,7 +254,7 @@ async def search_documents(
         if request.category:
             query = query.where(KnowledgeDocument.category == request.category)
 
-        query = query.limit(request.top_k)
+        query = query.limit(request.topK)
         result = await db.execute(query)
         docs = result.scalars().all()
 

@@ -1,16 +1,26 @@
 """
 ONNX Embedding Service
 
-로컬 ONNX 모델을 사용한 텍스트 임베딩 서비스
-PyTorch 없이 onnxruntime + tokenizers만으로 동작
+로컬 모델을 사용한 텍스트 임베딩 서비스
+onnxruntime + tokenizers로 동작
+
+모델 디렉토리에 model.onnx가 없으면
+pytorch_model.bin에서 자동 변환 (최초 1회, 이후 캐시 사용)
 
 필수 패키지:
     pip install onnxruntime tokenizers numpy
 
-모델 디렉토리 구조:
+자동 변환시 추가 필요:
+    pip install optimum[onnxruntime] torch transformers
+
+모델 디렉토리 구조 (둘 중 하나):
     {ONNX_MODEL_PATH}/
-    ├── model.onnx        # ONNX 모델 파일
-    └── tokenizer.json    # HuggingFace 토크나이저
+    ├── model.onnx        # ONNX 모델 (있으면 바로 사용)
+    └── tokenizer.json
+
+    {ONNX_MODEL_PATH}/
+    ├── pytorch_model.bin  # PyTorch 모델 (자동 변환 → model.onnx)
+    └── tokenizer.json
 """
 
 import numpy as np
@@ -86,11 +96,23 @@ class ONNXEmbeddingService:
         onnx_file = model_dir / "model.onnx"
         tokenizer_file = model_dir / "tokenizer.json"
 
-        if not onnx_file.exists():
+        if not model_dir.exists():
             raise FileNotFoundError(
-                f"ONNX 모델 파일을 찾을 수 없습니다: {onnx_file}\n"
-                f"모델 디렉토리에 model.onnx 파일이 있는지 확인하세요."
+                f"모델 디렉토리를 찾을 수 없습니다: {model_dir}"
             )
+
+        # model.onnx가 없으면 pytorch_model.bin에서 자동 변환
+        if not onnx_file.exists():
+            pytorch_file = model_dir / "pytorch_model.bin"
+            safetensors_file = model_dir / "model.safetensors"
+
+            if pytorch_file.exists() or safetensors_file.exists():
+                self._convert_to_onnx(model_dir)
+            else:
+                raise FileNotFoundError(
+                    f"모델 파일을 찾을 수 없습니다: {model_dir}\n"
+                    f"model.onnx 또는 pytorch_model.bin 파일이 필요합니다."
+                )
 
         if not tokenizer_file.exists():
             raise FileNotFoundError(
@@ -124,6 +146,50 @@ class ONNXEmbeddingService:
                 f"ONNX 모델 로드 실패: {e}\n"
                 f"모델 경로: {self.model_path}"
             )
+
+    def _convert_to_onnx(self, model_dir: Path) -> None:
+        """pytorch_model.bin → model.onnx 자동 변환 (최초 1회, 완전 오프라인)"""
+        import os
+        logger.info(f"model.onnx 없음 → PyTorch 모델에서 자동 변환 시작: {model_dir}")
+
+        try:
+            from optimum.onnxruntime import ORTModelForFeatureExtraction
+        except ImportError:
+            raise ImportError(
+                "model.onnx가 없어 PyTorch 모델에서 변환이 필요합니다.\n"
+                "pip install optimum[onnxruntime] torch transformers 로 설치하세요.\n"
+                "변환 완료 후에는 torch 없이도 동작합니다."
+            )
+
+        # 인터넷 접속 차단 (HuggingFace Hub 다운로드 방지)
+        old_env = {}
+        offline_vars = {
+            "TRANSFORMERS_OFFLINE": "1",
+            "HF_HUB_OFFLINE": "1",
+            "HF_DATASETS_OFFLINE": "1",
+        }
+        for key, val in offline_vars.items():
+            old_env[key] = os.environ.get(key)
+            os.environ[key] = val
+
+        try:
+            model = ORTModelForFeatureExtraction.from_pretrained(
+                str(model_dir), export=True, local_files_only=True
+            )
+            model.save_pretrained(str(model_dir))
+            logger.info(f"ONNX 변환 완료 (오프라인): {model_dir / 'model.onnx'}")
+        except Exception as e:
+            raise RuntimeError(
+                f"PyTorch → ONNX 변환 실패: {e}\n"
+                f"모델 경로: {model_dir}"
+            )
+        finally:
+            # 환경변수 복원
+            for key, val in old_env.items():
+                if val is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = val
 
     def _mean_pool_and_normalize(
         self,
