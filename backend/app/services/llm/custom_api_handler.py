@@ -1,44 +1,57 @@
 """
-Custom API LLM Handler
+Custom API LLM Handler (Dify/Agent Builder 호환)
 
-타 시스템 API를 통한 LLM 질의응답 핸들러
+Agent Builder(Dify) 스타일 API를 통한 LLM 질의응답 핸들러
 
-═══════════════════════════════════════════════════════════════════════════════
-                            구현 가이드
-═══════════════════════════════════════════════════════════════════════════════
+API 형식:
+    POST /v1/chat-messages
+    Authorization: Bearer {API_KEY}
+    {
+        "inputs": {},
+        "query": "사용자 질문",
+        "response_mode": "blocking",
+        "conversation_id": "",
+        "user": "ai-assistant"
+    }
 
-타 시스템 API 양식이 확정되면 아래 3개 메서드만 수정하면 됩니다:
-
-1. _build_request_body() - API 요청 본문 구성
-   - 타 시스템 API가 요구하는 형식에 맞게 요청 데이터 구성
-
-2. _call_api() - API 호출
-   - 엔드포인트 URL, 헤더, 인증 방식 설정
-
-3. _parse_response() - 응답 파싱
-   - 타 시스템 응답을 표준 LLMResponse로 변환
-
-═══════════════════════════════════════════════════════════════════════════════
+Blocking 응답 형식:
+    {
+        "event": "message",
+        "message_id": "...",
+        "conversation_id": "...",
+        "answer": "LLM 응답 텍스트",
+        "metadata": {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 200,
+                "total_tokens": 300
+            }
+        },
+        "created_at": 1234567890
+    }
 
 환경변수 설정:
-    CUSTOM_API_URL      - API 엔드포인트 URL
-    CUSTOM_API_KEY      - API 인증 키
-    CUSTOM_API_MODEL    - 기본 모델명 (선택)
+    CUSTOM_API_URL      - API 엔드포인트 URL (예: https://api.example.com/v1/chat-messages)
+    CUSTOM_API_KEY      - API 인증 키 (Bearer Token)
+    CUSTOM_API_MODEL    - 기본 모델명 (선택, 기본: "default")
     CUSTOM_API_TIMEOUT  - 타임아웃 초 (선택, 기본 60)
 """
 
 from typing import Dict, Any, Optional
 import httpx
 import os
+import logging
 
 from .base import BaseLLMHandler, LLMProvider, LLMRequest, LLMResponse
+
+logger = logging.getLogger(__name__)
 
 
 class CustomAPIHandler(BaseLLMHandler):
     """
-    타 시스템 API 핸들러
+    Agent Builder(Dify) 스타일 API 핸들러
 
-    API 양식 확정 후 아래 메서드들을 수정하세요.
+    blocking 모드로 순수 LLM 질의응답을 처리합니다.
     """
 
     provider = LLMProvider.CUSTOM_API
@@ -58,81 +71,57 @@ class CustomAPIHandler(BaseLLMHandler):
         if not self.base_url:
             raise ValueError(
                 "CUSTOM_API_URL 환경변수가 설정되지 않았습니다.\n"
-                "타 시스템 API URL을 설정해주세요."
+                "API 엔드포인트 URL을 설정해주세요.\n"
+                "예: CUSTOM_API_URL=https://api.example.com/v1/chat-messages"
             )
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    #                    아래 메서드들을 API 양식에 맞게 수정하세요
-    # ═══════════════════════════════════════════════════════════════════════════
 
     def _build_request_body(self, request: LLMRequest) -> Dict[str, Any]:
         """
-        ┌─────────────────────────────────────────────────────────────────────┐
-        │  API 요청 본문 구성                                                   │
-        │                                                                     │
-        │  타 시스템 API 양식에 맞게 이 메서드를 수정하세요.                       │
-        │                                                                     │
-        │  현재는 일반적인 형식으로 구현되어 있습니다.                             │
-        │  실제 API 문서를 확인하고 필드명과 구조를 맞춰주세요.                     │
-        └─────────────────────────────────────────────────────────────────────┘
+        Dify/Agent Builder API 요청 본문 구성
+
+        내부 messages(system/user/assistant) 형식을
+        Dify의 단일 query 문자열로 변환합니다.
         """
-        # 메시지 변환
-        messages = []
         system_prompt = None
+        conversation_parts = []
 
         for msg in request.messages:
             if msg.role == "system":
                 system_prompt = msg.content
+            elif msg.role == "assistant":
+                conversation_parts.append(f"[AI 응답]\n{msg.content}")
             else:
-                messages.append({
-                    "role": msg.role,
-                    "content": msg.content,
-                })
+                conversation_parts.append(msg.content)
 
-        # ───────────────────────────────────────────────────────────────────────
-        # TODO: 타 시스템 API 양식에 맞게 아래 body 구조를 수정하세요
-        # ───────────────────────────────────────────────────────────────────────
-        body = {
-            # 예시 필드들 - 실제 API 스펙에 맞게 변경
-            "model": request.model or self.default_model,
-            "messages": messages,
-            "max_tokens": request.max_tokens,
-            "temperature": request.temperature,
-        }
-
+        # query 구성: system prompt이 있으면 지시사항으로 앞에 추가
+        query = "\n\n".join(conversation_parts) if conversation_parts else ""
         if system_prompt:
-            body["system"] = system_prompt  # 또는 API가 요구하는 필드명
+            query = f"[시스템 지시]\n{system_prompt}\n\n[사용자 질문]\n{query}"
 
-        # extra 파라미터 (API별 추가 설정)
-        if request.extra:
-            body.update(request.extra)
+        body = {
+            "inputs": {},
+            "query": query,
+            "response_mode": "blocking",
+            "conversation_id": "",
+            "user": "ai-assistant",
+        }
 
         return body
 
     async def _call_api(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """
-        ┌─────────────────────────────────────────────────────────────────────┐
-        │  API 호출                                                           │
-        │                                                                     │
-        │  타 시스템 API의 인증 방식과 헤더를 맞춰주세요.                         │
-        │                                                                     │
-        │  일반적인 인증 방식:                                                  │
-        │  - Bearer Token: Authorization: Bearer {token}                      │
-        │  - API Key: X-API-Key: {key} 또는 api_key 파라미터                   │
-        │  - Basic Auth: Authorization: Basic {base64}                        │
-        └─────────────────────────────────────────────────────────────────────┘
+        Dify/Agent Builder API 호출
+
+        Bearer Token 인증으로 POST 요청을 보냅니다.
         """
         api_key = self._get_api_key()
 
-        # ───────────────────────────────────────────────────────────────────────
-        # TODO: 타 시스템 API 인증 방식에 맞게 헤더를 수정하세요
-        # ───────────────────────────────────────────────────────────────────────
         headers = {
             "Content-Type": "application/json",
-            # 인증 헤더 (아래 중 하나 선택하거나 API 스펙에 맞게 수정)
             "Authorization": f"Bearer {api_key}",
-            # "X-API-Key": api_key,
         }
+
+        logger.info(f"Custom API 호출: {self.base_url}")
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
@@ -151,109 +140,31 @@ class CustomAPIHandler(BaseLLMHandler):
 
     def _parse_response(self, raw_response: Dict[str, Any]) -> LLMResponse:
         """
-        ┌─────────────────────────────────────────────────────────────────────┐
-        │  응답 파싱                                                           │
-        │                                                                     │
-        │  타 시스템 API 응답 구조에 맞게 파싱 로직을 수정하세요.                  │
-        │                                                                     │
-        │  필수로 추출해야 할 데이터:                                            │
-        │  - content: LLM 응답 텍스트                                          │
-        │  - model: 사용된 모델명                                               │
-        │                                                                     │
-        │  선택적 데이터:                                                       │
-        │  - prompt_tokens, completion_tokens: 토큰 사용량                      │
-        │  - finish_reason: 종료 이유                                          │
-        └─────────────────────────────────────────────────────────────────────┘
+        Dify/Agent Builder blocking 응답 파싱
+
+        'answer' 필드에서 LLM 응답 텍스트를 추출하고,
+        'metadata.usage'에서 토큰 사용량을 추출합니다.
         """
-        # ───────────────────────────────────────────────────────────────────────
-        # TODO: 타 시스템 API 응답 구조에 맞게 수정하세요
-        # ───────────────────────────────────────────────────────────────────────
+        # 응답 텍스트 추출
+        content = raw_response.get("answer", "")
+        if not content:
+            raise ValueError(
+                f"API 응답에 'answer' 필드가 없습니다.\n"
+                f"응답 키: {list(raw_response.keys())}"
+            )
 
-        # 예시 1: OpenAI 호환 형식
-        # content = raw_response["choices"][0]["message"]["content"]
-
-        # 예시 2: 간단한 형식
-        # content = raw_response["response"]
-        # content = raw_response["result"]["text"]
-
-        # 예시 3: 중첩된 형식
-        # content = raw_response["data"]["output"]["text"]
-
-        # 현재 구현 (일반적인 형식 - 실제 API에 맞게 수정 필요)
-        content = self._extract_content(raw_response)
-        model = raw_response.get("model", self.default_model)
-
-        # 토큰 사용량 (API가 제공하는 경우)
-        usage = raw_response.get("usage", {})
-        prompt_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0)
+        # 토큰 사용량 (metadata.usage에서 추출)
+        metadata = raw_response.get("metadata", {})
+        usage = metadata.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
 
         return LLMResponse(
             content=content,
-            model=model,
+            model=self.default_model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-            finish_reason=raw_response.get("finish_reason") or raw_response.get("stop_reason"),
+            total_tokens=total_tokens,
+            finish_reason="stop",
         )
-
-    def _extract_content(self, raw_response: Dict[str, Any]) -> str:
-        """
-        응답에서 콘텐츠 추출 (여러 형식 시도)
-
-        API 양식 확정 후 이 메서드를 간소화하거나
-        _parse_response에서 직접 추출하세요.
-        """
-        # 시도할 경로들 (우선순위 순)
-        content_paths = [
-            # OpenAI 호환
-            lambda r: r["choices"][0]["message"]["content"],
-            # Anthropic 호환
-            lambda r: r["content"][0]["text"],
-            # 간단한 형식
-            lambda r: r["response"],
-            lambda r: r["result"],
-            lambda r: r["text"],
-            lambda r: r["output"],
-            # 중첩 형식
-            lambda r: r["data"]["response"],
-            lambda r: r["data"]["text"],
-            lambda r: r["result"]["text"],
-            lambda r: r["result"]["content"],
-        ]
-
-        for extract in content_paths:
-            try:
-                content = extract(raw_response)
-                if content and isinstance(content, str):
-                    return content
-            except (KeyError, IndexError, TypeError):
-                continue
-
-        # 모든 시도 실패시 전체 응답을 문자열로
-        raise ValueError(
-            f"응답에서 콘텐츠를 추출할 수 없습니다. "
-            f"_parse_response 메서드를 API 양식에 맞게 수정하세요.\n"
-            f"응답 구조: {list(raw_response.keys())}"
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#                           사용 예시
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# 1. 환경변수 설정:
-#    CUSTOM_API_URL=https://your-system.com/api/llm/chat
-#    CUSTOM_API_KEY=your-api-key
-#
-# 2. 코드에서 사용:
-#    from app.services.llm import get_llm_handler
-#
-#    handler = get_llm_handler("custom_api")
-#    response = await handler.simple_chat(
-#        prompt="안녕하세요",
-#        system_prompt="친절하게 답변하세요",
-#    )
-#    print(response.content)
-#
-# ═══════════════════════════════════════════════════════════════════════════════

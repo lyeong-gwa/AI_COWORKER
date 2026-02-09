@@ -51,10 +51,10 @@ class Settings(BaseSettings):
     CUSTOM_API_MODEL: Optional[str] = None    # 기본 모델명
     CUSTOM_API_TIMEOUT: int = 60              # 타임아웃 (초)
 
-    # External LLM (우회 LLM 시스템 - OpenAI 호환)
-    EXTERNAL_LLM: Optional[str] = None                # 외부 LLM 사용 플래그 ("true" 등, "openai"/"false" 제외시 활성)
-    EXTERNAL_LLM_API_KEY: Optional[str] = None        # 우회 시스템 인증 키
-    EXTERNAL_LLM_API_URL: Optional[str] = None        # 우회 시스템 엔드포인트 URL
+    # External LLM (우회 LLM 시스템 - Dify/Agent Builder 호환)
+    EXTERNAL_LLM: Optional[str] = None                # 외부 LLM 사용 플래그 ("true"/"1"/"yes" 설정시 활성)
+    EXTERNAL_LLM_API_KEY: Optional[str] = None        # 우회 시스템 인증 키 (Bearer Token)
+    EXTERNAL_LLM_API_URL: Optional[str] = None        # 우회 시스템 엔드포인트 URL (/v1/chat-messages)
 
     # 샌드박스 설정
     SANDBOX_TIMEOUT_SECONDS: int = 10
