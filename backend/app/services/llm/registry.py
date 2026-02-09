@@ -6,7 +6,6 @@ LLM Handler Registry
 """
 
 from typing import Dict, Type, Optional
-import os
 import logging
 
 from .base import BaseLLMHandler, LLMProvider
@@ -58,10 +57,11 @@ class LLMRegistry:
         # EXTERNAL_LLM 자동 감지 (Dify/Agent Builder 호환 우회 시스템)
         # 명시적 api_key/base_url이 없을 때만 적용
         if api_key is None and base_url is None:
-            external_llm = os.getenv("EXTERNAL_LLM") or ""
+            from ...core.config import settings as _settings
+            external_llm = getattr(_settings, 'EXTERNAL_LLM', None) or ""
             if external_llm.lower() in ("true", "1", "yes"):
-                ext_key = os.getenv("EXTERNAL_LLM_API_KEY")
-                ext_url = os.getenv("EXTERNAL_LLM_API_URL")
+                ext_key = getattr(_settings, 'EXTERNAL_LLM_API_KEY', None)
+                ext_url = getattr(_settings, 'EXTERNAL_LLM_API_URL', None)
                 if ext_key and ext_url:
                     if provider is None or provider.lower() in ("openai", "custom_api"):
                         api_key = ext_key
@@ -112,19 +112,19 @@ class LLMRegistry:
             return default
 
         # 2. EXTERNAL_LLM 플래그 확인 (우회 시스템)
-        external_llm = os.getenv('EXTERNAL_LLM') or ""
+        external_llm = getattr(settings, 'EXTERNAL_LLM', None) or ""
         if external_llm.lower() in ('true', '1', 'yes'):
-            if os.getenv('EXTERNAL_LLM_API_KEY') and os.getenv('EXTERNAL_LLM_API_URL'):
+            if getattr(settings, 'EXTERNAL_LLM_API_KEY', None) and getattr(settings, 'EXTERNAL_LLM_API_URL', None):
                 return 'custom_api'  # Dify/Agent Builder (base_url은 get()에서 처리)
 
         # 3. API 키 존재 여부로 자동 결정 (우선순위 순)
-        if os.getenv('CUSTOM_API_URL') and os.getenv('CUSTOM_API_KEY'):
+        if getattr(settings, 'CUSTOM_API_URL', None) and getattr(settings, 'CUSTOM_API_KEY', None):
             return 'custom_api'
-        elif os.getenv('AZURE_OPENAI_ENDPOINT') and os.getenv('AZURE_OPENAI_API_KEY'):
+        elif getattr(settings, 'AZURE_OPENAI_ENDPOINT', None) and getattr(settings, 'AZURE_OPENAI_API_KEY', None):
             return 'azure'
-        elif os.getenv('OPENAI_API_KEY') or getattr(settings, 'OPENAI_API_KEY', None):
+        elif getattr(settings, 'OPENAI_API_KEY', None):
             return 'openai'
-        elif os.getenv('ANTHROPIC_API_KEY') or getattr(settings, 'ANTHROPIC_API_KEY', None):
+        elif getattr(settings, 'ANTHROPIC_API_KEY', None):
             return 'anthropic'
 
         raise ValueError(

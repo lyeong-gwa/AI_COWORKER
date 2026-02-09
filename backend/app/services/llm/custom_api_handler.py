@@ -39,7 +39,6 @@ Blocking 응답 형식:
 
 from typing import Dict, Any, Optional
 import httpx
-import os
 import logging
 
 from .base import BaseLLMHandler, LLMProvider, LLMRequest, LLMResponse
@@ -55,7 +54,7 @@ class CustomAPIHandler(BaseLLMHandler):
     """
 
     provider = LLMProvider.CUSTOM_API
-    default_model = os.getenv("CUSTOM_API_MODEL", "default")
+    default_model = "default"
 
     def __init__(
         self,
@@ -64,9 +63,12 @@ class CustomAPIHandler(BaseLLMHandler):
     ):
         super().__init__(api_key, base_url)
 
-        # 환경변수에서 설정 로드
-        self.base_url = base_url or os.getenv("CUSTOM_API_URL")
-        self.timeout = int(os.getenv("CUSTOM_API_TIMEOUT", "60"))
+        from ...core.config import settings
+
+        # settings 객체에서 설정 로드 (.env → pydantic-settings)
+        self.base_url = base_url or getattr(settings, 'CUSTOM_API_URL', None)
+        self.timeout = getattr(settings, 'CUSTOM_API_TIMEOUT', 60)
+        self.default_model = getattr(settings, 'CUSTOM_API_MODEL', None) or "default"
 
         if not self.base_url:
             raise ValueError(
