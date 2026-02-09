@@ -9,8 +9,11 @@ AI 어시스턴트의 핵심 로직
 
 import json
 import uuid
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -187,7 +190,7 @@ async def search_knowledge_base(
             for r in results
         ]
     except Exception as e:
-        print(f"지식 베이스 검색 오류: {e}")
+        logger.warning(f"지식베이스 검색 오류: {type(e).__name__}: {e}")
         return []
 
 

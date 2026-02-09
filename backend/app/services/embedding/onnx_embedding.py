@@ -60,15 +60,21 @@ class ONNXEmbeddingService:
         if self._initialized:
             return
 
+        # 1. 패키지 import 확인
         try:
             from sentence_transformers import SentenceTransformer
+        except ImportError:
+            raise ImportError(
+                "sentence-transformers가 설치되지 않았습니다.\n"
+                "pip install sentence-transformers 로 설치하세요."
+            )
 
-            # 1. 로컬 경로에서 로드 시도
+        # 2. 모델 로드
+        try:
             if self.model_path and os.path.exists(self.model_path):
                 logger.info(f"로컬 모델 로드: {self.model_path}")
                 self._model = SentenceTransformer(self.model_path)
             else:
-                # 2. HuggingFace에서 다운로드 (자동 캐싱)
                 logger.info(f"모델 다운로드/로드: {self.model_name}")
                 self._model = SentenceTransformer(
                     self.model_name,
@@ -83,13 +89,12 @@ class ONNXEmbeddingService:
             self._initialized = True
             logger.info(f"임베딩 서비스 초기화 완료 (차원: {self.embedding_dim})")
 
-        except ImportError:
-            raise ImportError(
-                "sentence-transformers가 설치되지 않았습니다.\n"
-                "pip install sentence-transformers 로 설치하세요."
-            )
         except Exception as e:
-            raise RuntimeError(f"모델 로드 실패: {e}")
+            raise RuntimeError(
+                f"임베딩 모델 로드 실패: {e}\n"
+                f"모델 경로: {self.model_path}\n"
+                f"의존성 확인: pip install sentence-transformers torch transformers"
+            )
 
     @property
     def embedding_dim(self) -> int:
