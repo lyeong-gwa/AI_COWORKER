@@ -266,6 +266,32 @@ class VectorDatabase:
         self._ensure_initialized()
         return self._collection.count()
 
+    def get_all_document_hashes(self) -> Dict[str, str]:
+        """모든 문서의 content_hash 조회
+
+        Returns:
+            Dict[str, str]: {doc_id: content_hash}
+        """
+        self._ensure_initialized()
+
+        try:
+            # ChromaDB에서 모든 문서 메타데이터 가져오기
+            all_data = self._collection.get(
+                include=["metadatas"],
+            )
+
+            result = {}
+            if all_data and all_data["ids"]:
+                for i, doc_id in enumerate(all_data["ids"]):
+                    meta = all_data["metadatas"][i] if all_data["metadatas"] else {}
+                    if meta and "content_hash" in meta:
+                        result[doc_id] = meta["content_hash"]
+
+            return result
+        except Exception as e:
+            logger.warning(f"문서 해시 조회 실패: {e}")
+            return {}
+
     def reset(self) -> None:
         """컬렉션 초기화 (모든 데이터 삭제)"""
         self._ensure_initialized()

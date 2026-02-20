@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { mockTasks } from '../data/mockData';
-import { taskApi } from '../services/api';
+import { taskApi, chatApi } from '../services/api';
 import type { CreateTaskData } from '../services/api';
 import { useToast } from '../components/common/Toast';
 import { useChatAssistant } from '../hooks/useChatAssistant';
@@ -494,13 +494,32 @@ function TaskDetailModal({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [localTask, setLocalTask] = useState<TaskCard>(task);
+  const [newTodoText, setNewTodoText] = useState('');
+  const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
+  const [editingTodoText, setEditingTodoText] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const commentsEndRef = useRef<HTMLDivElement>(null);
 
   // Sync localTask when external task changes
+  // Only reset tab/refs when a DIFFERENT task is opened (by id), not on same-task updates
+  const prevTaskIdRef = useRef(task.id);
   useEffect(() => {
     setLocalTask(task);
-    setActiveTab('detail');
-    setExpandedRefs(new Set());
+    if (task.id !== prevTaskIdRef.current) {
+      setActiveTab('detail');
+      setExpandedRefs(new Set());
+      setEditingTodoId(null);
+      setEditingTodoText('');
+      setNewTodoText('');
+      prevTaskIdRef.current = task.id;
+    }
   }, [task]);
+
+  useEffect(() => {
+    if (activeTab === 'comments') {
+      commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [localTask.comments, activeTab, aiLoading]);
 
   const handleSaveEdit = async () => {
     setSaving(true);
@@ -539,6 +558,9 @@ function TaskDetailModal({
       setLocalTask(updatedTask);
       onUpdate(updatedTask);
       setIsEditing(false);
+      setEditingTodoId(null);
+      setEditingTodoText('');
+      setNewTodoText('');
     } finally {
       setSaving(false);
     }
@@ -585,28 +607,19 @@ function TaskDetailModal({
     onUpdate(updatedTask);
   };
 
-  const handleAddComment = async () => {
-    if (!commentText.trim()) return;
-
-    const newComment = {
-      id: `comment-${Date.now()}`,
-      authorId: 'user-1',
-      authorName: '나',
-      content: commentText.trim(),
-      createdAt: new Date().toISOString(),
+  const handleAddTodo = async () => {
+    if (!newTodoText.trim()) return;
+    const newTodo = {
+      id: `todo-${Date.now()}`,
+      text: newTodoText.trim(),
+      completed: false,
     };
-
-    const updatedTask: TaskCard = {
-      ...localTask,
-      comments: [...localTask.comments, newComment],
-      updatedAt: new Date().toISOString(),
-    };
+    const updatedTodos = [...localTask.todos, newTodo];
+    const updatedTask = { ...localTask, todos: updatedTodos, updatedAt: new Date().toISOString() };
 
     if (isOnline) {
       try {
-        await taskApi.update(localTask.id, {
-          comments: updatedTask.comments as any,
-        });
+        await taskApi.update(localTask.id, { todos: updatedTodos });
       } catch {
         // silent fail
       }
@@ -614,13 +627,174 @@ function TaskDetailModal({
 
     setLocalTask(updatedTask);
     onUpdate(updatedTask);
+    setNewTodoText('');
+  };
+
+  const handleDeleteTodo = async (todoId: string) => {
+    const updatedTodos = localTask.todos.filter((t) => t.id !== todoId);
+    const updatedTask = { ...localTask, todos: updatedTodos, updatedAt: new Date().toISOString() };
+
+    if (isOnline) {
+      try {
+        await taskApi.update(localTask.id, { todos: updatedTodos });
+      } catch {
+        // silent fail
+      }
+    }
+
+    setLocalTask(updatedTask);
+    onUpdate(updatedTask);
+  };
+
+  const handleSaveTodoEdit = async (todoId: string) => {
+    if (!editingTodoText.trim()) return;
+    const updatedTodos = localTask.todos.map((t) =>
+      t.id === todoId ? { ...t, text: editingTodoText.trim() } : t
+    );
+    const updatedTask = { ...localTask, todos: updatedTodos, updatedAt: new Date().toISOString() };
+
+    if (isOnline) {
+      try {
+        await taskApi.update(localTask.id, { todos: updatedTodos });
+      } catch {
+        // silent fail
+      }
+    }
+
+    setLocalTask(updatedTask);
+    onUpdate(updatedTask);
+    setEditingTodoId(null);
+    setEditingTodoText('');
+  };
+
+  const handleAddComment = async () => {
+    if (!commentText.trim() || aiLoading) return;
+
+    const userComment = {
+      id: `comment-${Date.now()}`,
+      authorId: 'user-1',
+      authorName: '나',
+      content: commentText.trim(),
+      createdAt: new Date().toISOString(),
+    };
+
+    // Optimistic: add user comment immediately
+    const withUserComment: TaskCard = {
+      ...localTask,
+      comments: [...localTask.comments, userComment],
+      updatedAt: new Date().toISOString(),
+    };
+    setLocalTask(withUserComment);
+    onUpdate(withUserComment);
     setCommentText('');
+
+    // Save user comment to backend
+    if (isOnline) {
+      try {
+        await taskApi.update(localTask.id, {
+          comments: withUserComment.comments as any,
+        });
+      } catch {
+        // silent fail for save
+      }
+    }
+
+    // Call AI
+    if (isOnline) {
+      setAiLoading(true);
+      try {
+        const response = await chatApi.sendMessage({
+          content: userComment.content,
+          context: { type: 'task', id: localTask.id },
+        });
+
+        const aiComment = {
+          id: `comment-${Date.now()}-ai`,
+          authorId: 'ai-assistant',
+          authorName: 'AI 어시스턴트',
+          content: response.content,
+          createdAt: new Date().toISOString(),
+        };
+
+        const withAiComment: TaskCard = {
+          ...withUserComment,
+          comments: [...withUserComment.comments, aiComment],
+          updatedAt: new Date().toISOString(),
+        };
+
+        // Save AI comment
+        try {
+          await taskApi.update(localTask.id, {
+            comments: withAiComment.comments as any,
+          });
+        } catch {
+          // silent fail
+        }
+
+        setLocalTask(withAiComment);
+        onUpdate(withAiComment);
+
+        // If AI performed an action (e.g., updated TODOs), refresh task data from backend
+        if (response.action?.success) {
+          try {
+            const refreshed = await taskApi.get(localTask.id);
+            setLocalTask(refreshed);
+            onUpdate(refreshed);
+          } catch {
+            // silent fail - the comment is already shown
+          }
+        }
+      } catch {
+        toast.warning('AI 응답을 가져오지 못했습니다');
+      } finally {
+        setAiLoading(false);
+      }
+    }
   };
 
   const handleCommentKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !aiLoading) {
       e.preventDefault();
       handleAddComment();
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!isOnline) return;
+    try {
+      await taskApi.deleteComment(localTask.id, commentId);
+      const updated = { ...localTask, comments: localTask.comments.filter(c => c.id !== commentId) };
+      setLocalTask(updated);
+      onUpdate(updated);
+      toast.success('댓글이 삭제되었습니다');
+    } catch (err: any) {
+      toast.error(err.message || '댓글 삭제 실패');
+    }
+  };
+
+  const handleDeleteActivity = async (logId: string) => {
+    if (!isOnline) return;
+    try {
+      await taskApi.deleteActivity(localTask.id, logId);
+      const updated = { ...localTask, activityLog: localTask.activityLog.filter(a => a.id !== logId) };
+      setLocalTask(updated);
+      onUpdate(updated);
+      toast.success('이력이 삭제되었습니다');
+    } catch (err: any) {
+      toast.error(err.message || '이력 삭제 실패');
+    }
+  };
+
+  const handleDeleteReference = async (docId: string) => {
+    if (!isOnline) return;
+    try {
+      await taskApi.deleteReference(localTask.id, docId);
+      const updated = { ...localTask, references: localTask.references?.filter(r => r.docId !== docId) || [] };
+      setLocalTask(updated);
+      onUpdate(updated);
+      toast.success('참조가 삭제되었습니다');
+    } catch (err: any) {
+      toast.error(err.message || '참조 삭제 실패');
     }
   };
 
@@ -756,7 +930,7 @@ function TaskDetailModal({
                 : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'
             }`}
           >
-            댓글 ({localTask.comments.length})
+            AI 대화 ({localTask.comments.length})
           </button>
           {localTask.references && localTask.references.length > 0 && (
             <button
@@ -871,7 +1045,12 @@ function TaskDetailModal({
                   </div>
                   <div className="flex justify-end gap-3 pt-2">
                     <button
-                      onClick={() => setIsEditing(false)}
+                      onClick={() => {
+                        setIsEditing(false);
+                        setEditingTodoId(null);
+                        setEditingTodoText('');
+                        setNewTodoText('');
+                      }}
                       className="px-4 py-2 text-gray-300 hover:text-white transition-colors"
                     >
                       취소
@@ -896,9 +1075,11 @@ function TaskDetailModal({
                     <h4 className="text-sm font-medium text-gray-400 mb-1">
                       설명
                     </h4>
-                    <p className="text-gray-200 whitespace-pre-wrap">
-                      {localTask.description || '(설명 없음)'}
-                    </p>
+                    {localTask.description ? (
+                      <StyledMarkdown variant="comment">{localTask.description}</StyledMarkdown>
+                    ) : (
+                      <p className="text-gray-500">(설명 없음)</p>
+                    )}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -947,32 +1128,113 @@ function TaskDetailModal({
           )}
 
           {activeTab === 'todos' && (
-            <div className="space-y-2">
+            <div className="space-y-3">
+              {/* Progress indicator */}
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-400">
+                  {localTask.todos.filter(t => t.completed).length}/{localTask.todos.length} 완료
+                </span>
+              </div>
+
+              {/* Add TODO input (edit mode only) */}
+              {isEditing && (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newTodoText}
+                    onChange={(e) => setNewTodoText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleAddTodo();
+                      }
+                    }}
+                    placeholder="새 TODO 항목 추가..."
+                    maxLength={200}
+                    className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={handleAddTodo}
+                    disabled={!newTodoText.trim()}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    추가
+                  </button>
+                </div>
+              )}
+
+              {/* TODO list */}
               {localTask.todos.length === 0 ? (
-                <p className="text-gray-400">TODO 항목이 없습니다.</p>
+                <p className="text-gray-500 text-sm text-center py-4">
+                  {isEditing ? 'TODO 항목이 없습니다. 위에서 추가해보세요.' : 'TODO 항목이 없습니다.'}
+                </p>
               ) : (
                 localTask.todos.map((todo) => (
-                  <label
+                  <div
                     key={todo.id}
-                    className="flex items-center gap-3 p-2 rounded hover:bg-gray-700 cursor-pointer"
+                    className="flex items-center gap-3 p-2 rounded hover:bg-gray-700 group"
                   >
                     <input
                       type="checkbox"
                       checked={todo.completed}
                       onChange={() => handleToggleTodo(todo.id)}
-                      className="w-4 h-4 rounded border-gray-500 accent-blue-500"
+                      className="w-4 h-4 rounded border-gray-500 accent-blue-500 flex-shrink-0"
                     />
-                    <span
-                      className={
-                        todo.completed
-                          ? 'text-gray-500 line-through'
-                          : 'text-gray-200'
-                      }
-                    >
-                      {todo.text}
-                    </span>
-                  </label>
+                    {isEditing && editingTodoId === todo.id ? (
+                      <input
+                        type="text"
+                        value={editingTodoText}
+                        onChange={(e) => setEditingTodoText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleSaveTodoEdit(todo.id);
+                          } else if (e.key === 'Escape') {
+                            setEditingTodoId(null);
+                            setEditingTodoText('');
+                          }
+                        }}
+                        onBlur={() => handleSaveTodoEdit(todo.id)}
+                        autoFocus
+                        maxLength={200}
+                        className="flex-1 bg-gray-600 border border-gray-500 rounded px-2 py-1 text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    ) : (
+                      <span
+                        onDoubleClick={isEditing ? () => {
+                          setEditingTodoId(todo.id);
+                          setEditingTodoText(todo.text);
+                        } : undefined}
+                        className={`flex-1 ${isEditing ? 'cursor-text' : 'cursor-default'} ${
+                          todo.completed ? 'text-gray-500 line-through' : 'text-gray-200'
+                        }`}
+                        title={isEditing ? '더블클릭하여 편집' : undefined}
+                      >
+                        {todo.text}
+                      </span>
+                    )}
+                    {isEditing && (
+                      <button
+                        onClick={() => handleDeleteTodo(todo.id)}
+                        className="text-gray-400 hover:text-red-400 text-sm px-1 transition-colors"
+                        title="삭제"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 ))
+              )}
+
+              {/* Save/Cancel buttons in edit mode */}
+              {isEditing && (
+                <div className="flex justify-end gap-3 pt-2">
+                  <button
+                    onClick={() => setIsEditing(false)}
+                    className="px-4 py-2 text-gray-300 hover:text-white transition-colors"
+                  >
+                    수정 완료
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -985,13 +1247,24 @@ function TaskDetailModal({
                 localTask.activityLog.map((log) => (
                   <div
                     key={log.id}
-                    className="flex items-start gap-3 text-sm border-l-2 border-gray-600 pl-3"
+                    className="flex items-start gap-3 text-sm border-l-2 border-gray-600 pl-3 group relative"
                   >
                     <div className="flex-1">
-                      <span className="text-blue-400 font-medium">
-                        {log.userName}
-                      </span>
-                      <span className="text-gray-300 font-medium"> · {log.action}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-blue-400 font-medium">
+                          {log.userName}
+                        </span>
+                        <span className="text-gray-300 font-medium"> · {log.action}</span>
+                        {isOnline && (
+                          <button
+                            onClick={() => handleDeleteActivity(log.id)}
+                            className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-400 text-xs px-2 py-1"
+                            title="이력 삭제"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
                       {log.detail && (
                         <div className="mt-1">
                           <StyledMarkdown variant="activity">{log.detail}</StyledMarkdown>
@@ -1008,42 +1281,102 @@ function TaskDetailModal({
           )}
 
           {activeTab === 'comments' && (
-            <div className="space-y-4">
-              {localTask.comments.length === 0 ? (
-                <p className="text-gray-400">댓글이 없습니다.</p>
-              ) : (
-                localTask.comments.map((comment) => (
-                  <div key={comment.id} className="bg-gray-700 rounded-lg p-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-xs text-white">
-                        {comment.authorName[0]}
-                      </div>
-                      <span className="text-gray-200 font-medium">
-                        {comment.authorName}
-                      </span>
-                      <span className="text-gray-500 text-xs">
-                        {new Date(comment.createdAt).toLocaleString('ko-KR')}
-                      </span>
+            <div className="flex flex-col h-full">
+              {/* Chat messages */}
+              <div className="flex-1 overflow-auto space-y-3 mb-3">
+                {localTask.comments.length === 0 && !aiLoading ? (
+                  <div className="text-center py-8">
+                    <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center mx-auto mb-3">
+                      <span className="text-2xl">💬</span>
                     </div>
-                    <StyledMarkdown variant="comment">{comment.content}</StyledMarkdown>
+                    <p className="text-gray-400 text-sm mb-1">이 태스크에 대해 AI에게 질문하세요</p>
+                    <p className="text-gray-500 text-xs">태스크 내용을 맥락으로 이해하고 답변합니다</p>
                   </div>
-                ))
-              )}
-              <div className="flex gap-2">
+                ) : (
+                  <>
+                    {localTask.comments.map((comment) => {
+                      const isAi = comment.authorId === 'ai-assistant';
+                      return (
+                        <div
+                          key={comment.id}
+                          className={`flex ${isAi ? 'justify-start' : 'justify-end'}`}
+                        >
+                          <div className={`max-w-[80%] ${isAi ? 'order-1' : ''}`}>
+                            <div className={`flex items-center gap-2 mb-1 ${isAi ? '' : 'justify-end'}`}>
+                              {isAi && (
+                                <div className="w-5 h-5 rounded-full bg-green-600 flex items-center justify-center text-xs text-white flex-shrink-0">
+                                  A
+                                </div>
+                              )}
+                              <span className="text-gray-500 text-xs">
+                                {comment.authorName} · {new Date(comment.createdAt).toLocaleString('ko-KR')}
+                              </span>
+                              {!isAi && isOnline && (
+                                <button
+                                  onClick={() => handleDeleteComment(comment.id)}
+                                  className="text-gray-500 hover:text-red-400 text-xs"
+                                  title="삭제"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                            <div
+                              className={`rounded-lg px-3 py-2 ${
+                                isAi
+                                  ? 'bg-gray-700 text-gray-200'
+                                  : 'bg-blue-600 text-white'
+                              }`}
+                            >
+                              <StyledMarkdown variant="comment">{comment.content}</StyledMarkdown>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {aiLoading && (
+                      <div className="flex justify-start">
+                        <div className="max-w-[80%]">
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="w-5 h-5 rounded-full bg-green-600 flex items-center justify-center text-xs text-white">
+                              A
+                            </div>
+                            <span className="text-gray-500 text-xs">AI 어시스턴트</span>
+                          </div>
+                          <div className="bg-gray-700 rounded-lg px-4 py-3">
+                            <div className="flex gap-1">
+                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                <div ref={commentsEndRef} />
+              </div>
+
+              {/* Input */}
+              <div className="flex gap-2 pt-2 border-t border-gray-700">
                 <input
                   type="text"
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
                   onKeyDown={handleCommentKeyDown}
-                  placeholder="댓글을 입력하세요..."
-                  className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  placeholder="이 태스크에 대해 AI에게 질문하세요..."
+                  disabled={aiLoading}
+                  className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
                 />
                 <button
                   onClick={handleAddComment}
-                  disabled={!commentText.trim()}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!commentText.trim() || aiLoading}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
-                  작성
+                  {aiLoading ? (
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : '전송'}
                 </button>
               </div>
             </div>
@@ -1054,44 +1387,55 @@ function TaskDetailModal({
               {localTask.references.map((ref) => (
                 <div
                   key={ref.docId}
-                  className="bg-gray-700/50 border border-gray-600 rounded-lg overflow-hidden"
+                  className="bg-gray-700/50 border border-gray-600 rounded-lg overflow-hidden group"
                 >
-                  <button
-                    onClick={() => {
-                      setExpandedRefs((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(ref.docId)) {
-                          next.delete(ref.docId);
-                        } else {
-                          next.add(ref.docId);
-                        }
-                        return next;
-                      });
-                    }}
-                    className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-700/80 transition-colors text-left"
-                  >
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <span className="text-lg flex-shrink-0">📄</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-gray-200 font-medium truncate">
-                          {ref.title}
-                        </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          {ref.category && (
-                            <span className="text-xs bg-blue-600/30 text-blue-300 px-2 py-0.5 rounded">
-                              {ref.category}
+                  <div className="relative">
+                    <button
+                      onClick={() => {
+                        setExpandedRefs((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(ref.docId)) {
+                            next.delete(ref.docId);
+                          } else {
+                            next.add(ref.docId);
+                          }
+                          return next;
+                        });
+                      }}
+                      className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-700/80 transition-colors text-left"
+                    >
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <span className="text-lg flex-shrink-0">📄</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-gray-200 font-medium truncate">
+                            {ref.title}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            {ref.category && (
+                              <span className="text-xs bg-blue-600/30 text-blue-300 px-2 py-0.5 rounded">
+                                {ref.category}
+                              </span>
+                            )}
+                            <span className="text-xs bg-green-600/30 text-green-300 px-2 py-0.5 rounded">
+                              유사도: {(ref.score * 100).toFixed(0)}%
                             </span>
-                          )}
-                          <span className="text-xs bg-green-600/30 text-green-300 px-2 py-0.5 rounded">
-                            유사도: {(ref.score * 100).toFixed(0)}%
-                          </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <span className="text-gray-400 text-sm flex-shrink-0 ml-2">
-                      {expandedRefs.has(ref.docId) ? '▲' : '▼'}
-                    </span>
-                  </button>
+                      <span className="text-gray-400 text-sm flex-shrink-0 ml-2">
+                        {expandedRefs.has(ref.docId) ? '▲' : '▼'}
+                      </span>
+                    </button>
+                    {isOnline && (
+                      <button
+                        onClick={() => handleDeleteReference(ref.docId)}
+                        className="absolute top-3 right-10 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-400 text-xs px-2 py-1 bg-gray-800 rounded"
+                        title="참조 삭제"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                   {expandedRefs.has(ref.docId) && (
                     <div className="px-4 pb-4 border-t border-gray-600">
                       <div className="mt-3">

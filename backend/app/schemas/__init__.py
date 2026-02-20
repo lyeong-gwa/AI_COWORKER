@@ -7,8 +7,8 @@ from .task import (
     TodoItem, Comment, ActivityLog,
 )
 from .knowledge import (
-    KnowledgeCreate, KnowledgeUpdate, KnowledgeResponse,
-    KnowledgeSearchRequest, KnowledgeSearchResult,
+    KnowledgeCreate, KnowledgeUpdate,
+    KnowledgeSearchRequest,
 )
 from .tool import (
     ToolCreate, ToolUpdate, ToolResponse,
@@ -33,8 +33,8 @@ __all__ = [
     'TaskCreate', 'TaskUpdate', 'TaskResponse',
     'TodoItem', 'Comment', 'ActivityLog',
     # Knowledge
-    'KnowledgeCreate', 'KnowledgeUpdate', 'KnowledgeResponse',
-    'KnowledgeSearchRequest', 'KnowledgeSearchResult',
+    'KnowledgeCreate', 'KnowledgeUpdate',
+    'KnowledgeSearchRequest',
     # Tool
     'ToolCreate', 'ToolUpdate', 'ToolResponse',
     'ToolTestRequest', 'ToolTestResponse',

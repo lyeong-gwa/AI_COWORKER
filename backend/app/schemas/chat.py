@@ -55,7 +55,7 @@ class ChatMessageRequest(BaseModel):
 
 class AgentAction(BaseModel):
     """에이전트가 수행한 작업 결과"""
-    type: Literal['explain', 'view', 'create', 'update', 'delete', 'execute', 'search']
+    type: Literal['explain', 'view', 'create', 'update', 'delete', 'execute', 'search', 'fill_form']
     target: str = Field(..., description="작업 대상 (예: 'task', 'workflow')")
     targetId: Optional[str] = Field(None, description="작업 대상 ID")
     success: bool = Field(True, description="작업 성공 여부")
@@ -123,7 +123,7 @@ class ChatHistoryResponse(BaseModel):
 
 class DetectedIntent(BaseModel):
     """감지된 사용자 의도 (내부용)"""
-    action: Literal['explain', 'view', 'create', 'update', 'delete', 'execute', 'search', 'chat']
+    action: Literal['explain', 'view', 'create', 'update', 'delete', 'execute', 'search', 'fill_form', 'chat']
     target: Optional[str] = None  # task, tool, node, workflow, document
     parameters: Dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(0.0, ge=0, le=1)

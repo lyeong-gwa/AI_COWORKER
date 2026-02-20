@@ -46,11 +46,16 @@ async function request<T>(
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new ApiError(
-        errorData.detail || `HTTP ${response.status}`,
-        response.status,
-        errorData.detail
-      );
+      const detail = errorData.detail;
+      // FastAPI validation errors return detail as array of objects
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((d: { msg?: string; loc?: string[] }) =>
+              `${d.loc?.slice(1).join('.') || ''}: ${d.msg || ''}`
+            ).join('; ')
+          : `HTTP ${response.status}`;
+      throw new ApiError(message, response.status, message);
     }
 
     // 204 No Content
@@ -115,6 +120,26 @@ export const taskApi = {
   /** 태스크 삭제 */
   delete: (id: string): Promise<void> =>
     request(`/tasks/${id}`, { method: 'DELETE' }),
+
+  /** 댓글 삭제 */
+  deleteComment: async (taskId: string, commentId: string): Promise<void> => {
+    await request(`/tasks/${taskId}/comments/${commentId}`, { method: 'DELETE' });
+  },
+
+  /** 활동 이력 삭제 */
+  deleteActivity: async (taskId: string, logId: string): Promise<void> => {
+    await request(`/tasks/${taskId}/activity/${logId}`, { method: 'DELETE' });
+  },
+
+  /** 참조 자료 추가 */
+  addReference: async (taskId: string, ref: { docId: string; title: string; content: string; category: string }): Promise<Task> => {
+    return request(`/tasks/${taskId}/references`, { method: 'POST', body: JSON.stringify(ref) });
+  },
+
+  /** 참조 자료 삭제 */
+  deleteReference: async (taskId: string, docId: string): Promise<void> => {
+    await request(`/tasks/${taskId}/references/${docId}`, { method: 'DELETE' });
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,16 +150,19 @@ import type { KnowledgeDocument } from '../types';
 
 export interface CreateKnowledgeData {
   title: string;
-  filename?: string;
   content: string;
-  summary?: string;
   source?: string;
   category?: string;
   tags?: string[];
-  metadata?: Record<string, unknown>;
 }
 
-export interface UpdateKnowledgeData extends Partial<CreateKnowledgeData> {}
+export interface UpdateKnowledgeData {
+  title: string;
+  content: string;
+  source?: string;
+  category?: string;
+  tags?: string[];
+}
 
 export interface SearchKnowledgeData {
   query: string;
@@ -162,15 +190,15 @@ export const knowledgeApi = {
 
   /** 문서 수정 */
   update: (id: string, data: UpdateKnowledgeData): Promise<KnowledgeDocument> =>
-    request(`/knowledge/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    request(`/knowledge/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
   /** 문서 삭제 */
   delete: (id: string): Promise<void> =>
     request(`/knowledge/${id}`, { method: 'DELETE' }),
 
-  /** 벡터 DB 동기화 */
-  sync: (id: string): Promise<KnowledgeDocument> =>
-    request(`/knowledge/${id}/sync`, { method: 'POST' }),
+  /** 벡터 DB 동기화 (id 없으면 전체) */
+  sync: (id?: string): Promise<{ synced: number; total?: number; document?: KnowledgeDocument }> =>
+    request(`/knowledge/sync${id ? `?id=${id}` : ''}`, { method: 'POST' }),
 
   /** 유사도 검색 */
   search: (data: SearchKnowledgeData): Promise<KnowledgeSearchResult[]> =>
@@ -435,7 +463,7 @@ export interface ChatMessageRequest {
 }
 
 export interface AgentAction {
-  type: 'explain' | 'view' | 'create' | 'update' | 'delete' | 'execute' | 'search';
+  type: 'explain' | 'view' | 'create' | 'update' | 'delete' | 'execute' | 'search' | 'fill_form';
   target: string;
   targetId?: string;
   success: boolean;

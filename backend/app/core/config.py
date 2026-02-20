@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # API 설정
     API_V1_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:5177", "http://localhost:5178", "http://localhost:3000", "http://localhost:9090"]
 
     # 데이터베이스
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/app.db"
@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Vector DB (ChromaDB)
     CHROMA_PERSIST_DIR: str = "./data/chroma"
     CHROMA_COLLECTION_NAME: str = "knowledge_base"
+
+    # 지식 문서 디렉토리
+    KNOWLEDGE_DIR: str = "./data/knowledge"
 
     # 로컬 임베딩 모델 (ONNX Runtime + tokenizers)
     ONNX_MODEL_PATH: str = "./models/onnx/jhgan_ko-sroberta-multitask"

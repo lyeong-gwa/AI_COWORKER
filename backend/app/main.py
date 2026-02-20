@@ -11,7 +11,6 @@ import os
 
 from .core.config import settings
 from .core.database import init_db
-from .seed import seed_database
 from .api import api_router
 
 
@@ -23,14 +22,11 @@ async def lifespan(app: FastAPI):
 
     # 데이터 디렉토리 생성
     os.makedirs("./data", exist_ok=True)
+    os.makedirs("./data/knowledge", exist_ok=True)
 
     # 데이터베이스 초기화
     await init_db()
     print("[OK] 데이터베이스 초기화 완료")
-
-    # 시드 데이터 확인 및 생성
-    await seed_database()
-    print("[OK] 시드 데이터 확인 완료")
 
     yield
 

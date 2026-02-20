@@ -173,3 +173,106 @@ async def delete_task(task_id: str, db: AsyncSession = Depends(get_db)):
 
     await db.delete(task)
     await db.commit()
+
+
+@router.delete("/{task_id}/comments/{comment_id}", status_code=204)
+async def delete_comment(
+    task_id: str,
+    comment_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """태스크 댓글 삭제"""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="태스크를 찾을 수 없습니다")
+
+    if not task.comments:
+        raise HTTPException(status_code=404, detail="댓글을 찾을 수 없습니다")
+
+    updated = [c for c in task.comments if c.get("id") != comment_id]
+    if len(updated) == len(task.comments):
+        raise HTTPException(status_code=404, detail="댓글을 찾을 수 없습니다")
+
+    task.comments = updated
+    await db.commit()
+
+
+@router.delete("/{task_id}/activity/{log_id}", status_code=204)
+async def delete_activity_log(
+    task_id: str,
+    log_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """태스크 활동 이력 삭제"""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="태스크를 찾을 수 없습니다")
+
+    if not task.activity_log:
+        raise HTTPException(status_code=404, detail="이력을 찾을 수 없습니다")
+
+    updated = [a for a in task.activity_log if a.get("id") != log_id]
+    if len(updated) == len(task.activity_log):
+        raise HTTPException(status_code=404, detail="이력을 찾을 수 없습니다")
+
+    task.activity_log = updated
+    await db.commit()
+
+
+@router.post("/{task_id}/references")
+async def add_reference(
+    task_id: str,
+    ref_data: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """태스크에 참조 지식 수동 추가"""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="태스크를 찾을 수 없습니다")
+
+    new_ref = {
+        "docId": ref_data.get("docId", ""),
+        "title": ref_data.get("title", ""),
+        "content": ref_data.get("content", "")[:500],
+        "category": ref_data.get("category", ""),
+        "score": ref_data.get("score", 0),
+    }
+
+    if not task.references:
+        task.references = []
+    # 중복 방지
+    existing_ids = {r.get("docId") for r in task.references}
+    if new_ref["docId"] in existing_ids:
+        raise HTTPException(status_code=409, detail="이미 추가된 참조입니다")
+
+    task.references = task.references + [new_ref]
+    await db.commit()
+    await db.refresh(task)
+
+    return to_camel_response(task)
+
+
+@router.delete("/{task_id}/references/{doc_id}", status_code=204)
+async def delete_reference(
+    task_id: str,
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """태스크 참조 지식 삭제"""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="태스크를 찾을 수 없습니다")
+
+    if not task.references:
+        raise HTTPException(status_code=404, detail="참조를 찾을 수 없습니다")
+
+    updated = [r for r in task.references if r.get("docId") != doc_id]
+    if len(updated) == len(task.references):
+        raise HTTPException(status_code=404, detail="참조를 찾을 수 없습니다")
+
+    task.references = updated
+    await db.commit()

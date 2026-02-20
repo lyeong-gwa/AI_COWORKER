@@ -18,6 +18,23 @@ from ...services.node_executor import execute_node
 
 router = APIRouter()
 
+# camelCase → snake_case 매핑
+CAMEL_TO_SNAKE = {
+    "linkedToolIds": "linked_tool_ids",
+    "systemPrompt": "system_prompt",
+    "userPromptTemplate": "user_prompt_template",
+    "inputSchema": "input_schema",
+    "outputSchema": "output_schema",
+    "outputEnforcement": "output_enforcement",
+    "llmConfig": "llm_config",
+    "isActive": "is_active",
+}
+
+
+def to_snake_case(data: dict) -> dict:
+    """camelCase 키를 snake_case로 변환"""
+    return {CAMEL_TO_SNAKE.get(k, k): v for k, v in data.items()}
+
 
 def to_camel_response(node: AINode) -> dict:
     """AINode ORM 객체를 camelCase dict로 변환"""
@@ -86,11 +103,7 @@ async def get_node(node_id: str, db: AsyncSession = Depends(get_db)):
 @router.post("", status_code=201)
 async def create_node(data: NodeCreate, db: AsyncSession = Depends(get_db)):
     """노드 생성"""
-    node_data = data.model_dump(by_alias=False)
-
-    # model_config_data를 model_config로 변환
-    if 'model_config_data' in node_data:
-        node_data['model_config'] = node_data.pop('model_config_data')
+    node_data = to_snake_case(data.model_dump(by_alias=False))
 
     node = AINode(
         id=f"node-{uuid.uuid4().hex[:8]}",
@@ -116,11 +129,7 @@ async def update_node(
     if not node:
         raise HTTPException(status_code=404, detail="노드를 찾을 수 없습니다")
 
-    update_data = data.model_dump(exclude_unset=True, by_alias=False)
-
-    # model_config_data를 model_config로 변환
-    if 'model_config_data' in update_data:
-        update_data['model_config'] = update_data.pop('model_config_data')
+    update_data = to_snake_case(data.model_dump(exclude_unset=True, by_alias=False))
 
     for key, value in update_data.items():
         setattr(node, key, value)

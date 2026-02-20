@@ -43,6 +43,9 @@ class LLMRequest:
     # 메타데이터 (핸들러별 추가 설정)
     extra: Dict[str, Any] = field(default_factory=dict)
 
+    # 로깅용 호출 유형 태그
+    call_type: str = "unknown"
+
     @classmethod
     def simple(
         cls,
@@ -134,29 +137,81 @@ class BaseLLMHandler(ABC):
         1. 요청 본문 구성 (_build_request_body)
         2. API 호출 (_call_api)
         3. 응답 파싱 (_parse_response)
+        4. 호출 로그 저장 (1질의 1로그파일)
         """
         import time
+        from .llm_logger import save_llm_log
 
         # 모델 기본값 설정
         if not request.model:
             request.model = self.default_model
 
+        # 로깅용 메시지 준비
+        log_messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in request.messages
+        ]
+        log_extra = {}
+        if request.top_p is not None:
+            log_extra["top_p"] = request.top_p
+        if request.frequency_penalty is not None:
+            log_extra["frequency_penalty"] = request.frequency_penalty
+        if request.presence_penalty is not None:
+            log_extra["presence_penalty"] = request.presence_penalty
+        if request.stop:
+            log_extra["stop"] = request.stop
+
         start_time = time.perf_counter()
+        error_msg = None
 
-        # 1. 요청 본문 구성
-        body = self._build_request_body(request)
+        try:
+            # 1. 요청 본문 구성
+            body = self._build_request_body(request)
 
-        # 2. API 호출
-        raw_response = await self._call_api(body)
+            # 2. API 호출
+            raw_response = await self._call_api(body)
 
-        # 3. 응답 파싱
-        response = self._parse_response(raw_response)
+            # 3. 응답 파싱
+            response = self._parse_response(raw_response)
 
-        # 레이턴시 기록
-        response.latency_ms = (time.perf_counter() - start_time) * 1000
-        response.raw_response = raw_response
+            # 레이턴시 기록
+            response.latency_ms = (time.perf_counter() - start_time) * 1000
+            response.raw_response = raw_response
 
-        return response
+            # 4. 성공 로그 저장
+            save_llm_log(
+                call_type=request.call_type,
+                provider=self.provider.value if self.provider else "unknown",
+                model=request.model or "",
+                messages=log_messages,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                response_content=response.content,
+                finish_reason=response.finish_reason,
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
+                total_tokens=response.total_tokens,
+                latency_ms=response.latency_ms,
+                extra_params=log_extra if log_extra else None,
+            )
+
+            return response
+
+        except Exception as e:
+            # 실패 로그 저장
+            latency = (time.perf_counter() - start_time) * 1000
+            save_llm_log(
+                call_type=request.call_type,
+                provider=self.provider.value if self.provider else "unknown",
+                model=request.model or "",
+                messages=log_messages,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                latency_ms=latency,
+                error=str(e),
+                extra_params=log_extra if log_extra else None,
+            )
+            raise
 
     async def simple_chat(
         self,
@@ -165,6 +220,7 @@ class BaseLLMHandler(ABC):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
+        call_type: str = "unknown",
     ) -> LLMResponse:
         """간단한 채팅 헬퍼"""
         request = LLMRequest.simple(
@@ -174,6 +230,7 @@ class BaseLLMHandler(ABC):
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        request.call_type = call_type
         return await self.chat(request)
 
     @abstractmethod

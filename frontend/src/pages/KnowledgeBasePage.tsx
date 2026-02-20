@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { mockDocuments } from '../data/mockData';
 import { knowledgeApi } from '../services/api';
 import { useToast } from '../components/common/Toast';
@@ -21,10 +22,10 @@ const CATEGORY_OPTIONS = [
   { value: 'etc', label: '기타' },
 ];
 
-const syncStatusConfig = {
+const syncStatusConfig: Record<string, { label: string; color: string; icon: string }> = {
   synced: { label: '동기화됨', color: 'bg-green-500', icon: '\u2713' },
-  pending: { label: '대기중', color: 'bg-yellow-500', icon: '\u23F3' },
-  error: { label: '오류', color: 'bg-red-500', icon: '\u2715' },
+  modified: { label: '수정됨', color: 'bg-yellow-500', icon: '\u23F3' },
+  not_synced: { label: '미동기화', color: 'bg-gray-500', icon: '\u25CB' },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,7 +104,7 @@ function DocumentCard({
   doc: KnowledgeDocument;
   onClick: () => void;
 }) {
-  const status = syncStatusConfig[doc.syncStatus];
+  const status = syncStatusConfig[doc.syncStatus] || syncStatusConfig.not_synced;
 
   return (
     <div
@@ -116,7 +117,7 @@ function DocumentCard({
           <span className="text-2xl flex-shrink-0">{'\uD83D\uDCC4'}</span>
           <div className="min-w-0">
             <h3 className="font-medium text-white truncate">{doc.title}</h3>
-            <p className="text-sm text-gray-400 truncate">{doc.filename}</p>
+            <p className="text-sm text-gray-400 truncate">{doc.id}.md</p>
           </div>
         </div>
         <div
@@ -138,12 +139,7 @@ function DocumentCard({
 
       {/* Document info */}
       <div className="flex items-center gap-4 text-sm text-gray-400 mb-3">
-        {doc.tokenCount != null && <span>{'\uD83D\uDCCA'} {doc.tokenCount} 토큰</span>}
-        {doc.lastSyncedAt && (
-          <span>
-            {'\uD83D\uDD50'} {new Date(doc.lastSyncedAt).toLocaleDateString('ko-KR')}
-          </span>
-        )}
+        {doc.contentHash && <span>#{doc.contentHash.slice(0, 8)}</span>}
       </div>
 
       {/* Tags */}
@@ -190,7 +186,7 @@ function SearchResultCard({
           <span className="text-2xl flex-shrink-0">{'\uD83D\uDD0D'}</span>
           <div className="min-w-0">
             <h3 className="font-medium text-white truncate">{result.document.title}</h3>
-            <p className="text-sm text-gray-400 truncate">{result.document.filename}</p>
+            <p className="text-sm text-gray-400 truncate">{result.document.id}.md</p>
           </div>
         </div>
         <div className={`flex-shrink-0 text-sm font-mono font-bold ${scoreColor}`}>
@@ -220,7 +216,6 @@ function SearchResultCard({
 
 interface CreateFormData {
   title: string;
-  filename: string;
   content: string;
   category: string;
   tags: string;
@@ -229,7 +224,6 @@ interface CreateFormData {
 
 const emptyCreateForm: CreateFormData = {
   title: '',
-  filename: '',
   content: '',
   category: '',
   tags: '',
@@ -275,7 +269,6 @@ function DocumentCreateModal({
       if (isApiMode) {
         const created = await knowledgeApi.create({
           title: form.title.trim(),
-          filename: form.filename.trim() || `${form.title.trim().replace(/\s+/g, '-').toLowerCase()}.md`,
           content: form.content,
           category: form.category || 'etc',
           tags,
@@ -289,13 +282,11 @@ function DocumentCreateModal({
         const localDoc: KnowledgeDocument = {
           id: `doc-local-${Date.now()}`,
           title: form.title.trim(),
-          filename: form.filename.trim() || `${form.title.trim().replace(/\s+/g, '-').toLowerCase()}.md`,
           content: form.content,
           category: form.category || 'etc',
           tags,
           source: form.source.trim() || undefined,
-          syncStatus: 'pending',
-          tokenCount: Math.ceil(form.content.length / 4),
+          syncStatus: 'not_synced',
           createdAt: now,
           updatedAt: now,
         };
@@ -341,19 +332,6 @@ function DocumentCreateModal({
             />
           </div>
 
-          {/* Filename */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              파일명
-            </label>
-            <input
-              name="filename"
-              value={form.filename}
-              onChange={handleChange}
-              placeholder="예: my-document.md (비어있으면 자동 생성)"
-              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
 
           {/* Category */}
           <div>
@@ -518,8 +496,7 @@ function DocumentDetailModal({
           content: editContent,
           category: editCategory,
           tags,
-          syncStatus: doc.vectorId ? 'pending' : doc.syncStatus,
-          tokenCount: Math.ceil(editContent.length / 4),
+          syncStatus: doc.syncStatus === 'synced' ? 'modified' : doc.syncStatus,
           updatedAt: now,
         };
         onUpdated(localUpdated);
@@ -556,9 +533,16 @@ function DocumentDetailModal({
     setSyncing(true);
     try {
       if (isApiMode) {
-        const synced = await knowledgeApi.sync(doc.id);
-        onUpdated(synced);
-        toast.success('벡터 DB 동기화가 완료되었습니다.');
+        const result = await knowledgeApi.sync(doc.id);
+        if (result.document) {
+          onUpdated(result.document);
+          toast.success('벡터 DB 동기화가 완료되었습니다.');
+        } else {
+          // If document is not returned, update syncStatus locally
+          const now = new Date().toISOString();
+          onUpdated({ ...doc, syncStatus: 'synced', updatedAt: now });
+          toast.success('벡터 DB 동기화가 완료되었습니다.');
+        }
       } else {
         // Simulate sync for local mode
         await new Promise((r) => setTimeout(r, 1500));
@@ -566,8 +550,6 @@ function DocumentDetailModal({
         const localSynced: KnowledgeDocument = {
           ...doc,
           syncStatus: 'synced',
-          vectorId: doc.vectorId || `vec-local-${Date.now()}`,
-          lastSyncedAt: now,
           updatedAt: now,
         };
         onUpdated(localSynced);
@@ -599,7 +581,7 @@ function DocumentDetailModal({
                 ) : (
                   <h2 className="text-xl font-bold text-white truncate">{doc.title}</h2>
                 )}
-                <p className="text-gray-400 text-sm">{doc.filename}</p>
+                <p className="text-gray-400 text-sm">{doc.id}.md</p>
               </div>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -738,15 +720,15 @@ function DocumentDetailModal({
                   <h4 className="text-white font-medium mb-3">벡터 DB 정보</h4>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-gray-400">Vector ID</span>
+                      <span className="text-gray-400">문서 ID</span>
                       <span className="text-gray-200 font-mono">
-                        {doc.vectorId || '미동기화'}
+                        {doc.id}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-400">토큰 수</span>
-                      <span className="text-gray-200">
-                        {doc.tokenCount ? `${doc.tokenCount} tokens` : '-'}
+                      <span className="text-gray-400">Content Hash</span>
+                      <span className="text-gray-200 font-mono">
+                        {doc.contentHash ? doc.contentHash.slice(0, 16) : '-'}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -758,25 +740,23 @@ function DocumentDetailModal({
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-400">마지막 동기화</span>
+                      <span className="text-gray-400">문서 길이</span>
                       <span className="text-gray-200">
-                        {doc.lastSyncedAt
-                          ? new Date(doc.lastSyncedAt).toLocaleString('ko-KR')
-                          : '-'}
+                        {doc.content.length} characters
                       </span>
                     </div>
                   </div>
                 </div>
 
                 {/* Sync Status Message */}
-                {doc.syncStatus === 'pending' && (
+                {doc.syncStatus === 'modified' && (
                   <div className="bg-yellow-900/30 border border-yellow-600 rounded-lg p-3 text-yellow-200 text-sm">
                     {'\u23F3'} 문서가 수정되어 재동기화가 필요합니다.
                   </div>
                 )}
-                {doc.syncStatus === 'error' && (
-                  <div className="bg-red-900/30 border border-red-600 rounded-lg p-3 text-red-200 text-sm">
-                    {'\u2715'} 동기화 중 오류가 발생했습니다. 다시 시도해주세요.
+                {doc.syncStatus === 'not_synced' && (
+                  <div className="bg-gray-900/30 border border-gray-600 rounded-lg p-3 text-gray-200 text-sm">
+                    {'\u25CB'} 벡터 DB에 동기화되지 않았습니다. 동기화를 실행하세요.
                   </div>
                 )}
                 {doc.syncStatus === 'synced' && (
@@ -868,6 +848,7 @@ export function KnowledgeBasePage() {
   const { toast } = useToast();
   const { setDocumentContext, clearContext } = useChatAssistant();
   const { onDataChange } = useChatContext();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // Data state
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
@@ -916,6 +897,20 @@ export function KnowledgeBasePage() {
       if (target.includes('knowledge') || target.includes('document')) loadDocuments();
     });
   }, [onDataChange, loadDocuments]);
+
+  // ── Auto-open document from URL query param ──────────────────────
+  useEffect(() => {
+    const docId = searchParams.get('doc');
+    if (docId && documents.length > 0 && !loading) {
+      const found = documents.find(d => d.id === docId);
+      if (found) {
+        setSelectedDoc(found);
+        // Remove the query param to keep URL clean
+        searchParams.delete('doc');
+        setSearchParams(searchParams, { replace: true });
+      }
+    }
+  }, [searchParams, documents, loading, setSearchParams]);
 
   // ── Keyboard shortcuts ────────────────────────────────────────
   useEffect(() => {
@@ -977,7 +972,7 @@ export function KnowledgeBasePage() {
       result = result.filter(
         (doc) =>
           doc.title.toLowerCase().includes(q) ||
-          doc.filename.toLowerCase().includes(q) ||
+          doc.id.toLowerCase().includes(q) ||
           doc.content.toLowerCase().includes(q) ||
           doc.tags.some((tag) => tag.toLowerCase().includes(q))
       );
@@ -1026,8 +1021,8 @@ export function KnowledgeBasePage() {
     () => ({
       total: documents.length,
       synced: documents.filter((d) => d.syncStatus === 'synced').length,
-      pending: documents.filter((d) => d.syncStatus === 'pending').length,
-      error: documents.filter((d) => d.syncStatus === 'error').length,
+      pending: documents.filter((d) => d.syncStatus === 'modified').length,
+      error: documents.filter((d) => d.syncStatus === 'not_synced').length,
     }),
     [documents]
   );

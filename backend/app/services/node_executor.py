@@ -21,7 +21,7 @@ import jsonschema
 
 from ..models.node import AINode
 from ..models.tool import ToolDefinition
-from ..models.knowledge import KnowledgeDocument
+from .knowledge_file_service import read_md_file
 from ..schemas.node import NodeTestResponse
 from ..core.config import settings
 from .tool_executor import execute_tool, ToolExecutionResult
@@ -114,10 +114,7 @@ async def execute_node(
 
             knowledge_docs = []
             for doc_id in node.linked_knowledge_ids:
-                result = await db.execute(
-                    select(KnowledgeDocument).where(KnowledgeDocument.id == doc_id)
-                )
-                doc = result.scalar_one_or_none()
+                doc = read_md_file(doc_id)
                 if doc:
                     knowledge_docs.append(f"# {doc.title}\n{doc.content}")
 

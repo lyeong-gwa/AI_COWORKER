@@ -72,22 +72,15 @@ export interface TaskColumn {
 
 export interface KnowledgeDocument {
   id: string;
-  filename: string;
   title: string;
   content: string;
-  summary?: string;
   source?: string;
   category: string;
-  // 벡터 DB 동기화 정보 (문서 전체가 하나의 청크)
-  vectorId?: string;       // 벡터 DB 내 ID
-  syncStatus: 'synced' | 'pending' | 'error';
-  lastSyncedAt?: string;
-  tokenCount?: number;     // 토큰 수 (청크 크기 참고용)
+  tags: string[];
+  contentHash?: string;
+  syncStatus: 'synced' | 'modified' | 'not_synced';
   createdAt: string;
   updatedAt: string;
-  tags: string[];
-  // 메타데이터 (필터링용)
-  metadata?: Record<string, unknown>;
 }
 
 // ============================================
