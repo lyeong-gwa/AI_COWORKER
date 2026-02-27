@@ -7,9 +7,9 @@ import { healthApi } from '../../services/api';
 const navItems = [
   { path: '/', label: '태스크 보드', icon: '📋', shortcut: '1' },
   { path: '/knowledge', label: '지식 베이스', icon: '📚', shortcut: '2' },
-  { path: '/tools', label: '도구 관리', icon: '🔧', shortcut: '3' },
+  { path: '/api-definitions', label: 'API 정의', icon: '🌐', shortcut: '3' },
   { path: '/nodes', label: '노드 관리', icon: '🔷', shortcut: '4' },
-  { path: '/workflow', label: '워크플로우', icon: '⚙️', shortcut: '5' },
+  { path: '/factory', label: '공장 맵', icon: '🏭', shortcut: '5' },
 ];
 
 export function Layout() {

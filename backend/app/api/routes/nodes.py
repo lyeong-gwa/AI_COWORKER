@@ -20,7 +20,6 @@ router = APIRouter()
 
 # camelCase → snake_case 매핑
 CAMEL_TO_SNAKE = {
-    "linkedToolIds": "linked_tool_ids",
     "systemPrompt": "system_prompt",
     "userPromptTemplate": "user_prompt_template",
     "inputSchema": "input_schema",
@@ -46,8 +45,6 @@ def to_camel_response(node: AINode) -> dict:
         "icon": node.icon,
         "color": node.color,
         "tags": node.tags,
-        "linkedToolIds": node.linked_tool_ids,
-        "knowledge": node.knowledge,
         "systemPrompt": node.system_prompt,
         "userPromptTemplate": node.user_prompt_template,
         "inputSchema": node.input_schema,
@@ -169,9 +166,7 @@ async def test_node(
     # 노드 실행
     exec_result = await execute_node(
         node=node,
-        input_data=request.input_data,
-        mock_tool_results=request.mock_tool_results,
-        mock_knowledge=request.mock_knowledge,
+        input_data=request.inputData,
         db=db,
     )
 

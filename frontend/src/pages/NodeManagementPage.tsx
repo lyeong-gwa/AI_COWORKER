@@ -1,11 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { getToolDefinitionById } from '../data/mockData';
-import type { AINode, KnowledgeFilterCondition, ToolDefinition } from '../types';
+import type { AINode } from '../types';
 import { SchemaFieldEditor, schemaToRows, rowsToSchema } from '../components/nodes/SchemaFieldEditor';
 import type { SchemaFieldRow } from '../components/nodes/SchemaFieldEditor';
-import { ToolEditor } from '../components/nodes/ToolEditor';
-import { KnowledgeFilterEditor } from '../components/nodes/KnowledgeFilterEditor';
-import { TestTab } from '../components/nodes/TestTab';
 import { PromptEditor, defaultOutputEnforcement } from '../components/nodes/PromptEditor';
 import type { OutputEnforcementConfig } from '../components/nodes/PromptEditor';
 import { nodeApi } from '../services/api';
@@ -96,16 +92,6 @@ function NodeCard({
 
         {/* Features */}
         <div className="flex flex-wrap gap-2">
-          {(node.linkedToolIds?.length || 0) > 0 && (
-            <span className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-blue-900 text-blue-300">
-              🔧 도구 {node.linkedToolIds.length}개
-            </span>
-          )}
-          {node.knowledge.enabled && (
-            <span className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-purple-900 text-purple-300">
-              📚 지식 연동
-            </span>
-          )}
           <span className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-gray-700 text-gray-300">
             🤖 {node.llmConfig.model}
           </span>
@@ -138,10 +124,7 @@ function NodeCard({
 const TABS = [
   { key: 'basic', label: '기본 정보', icon: '📋' },
   { key: 'schema', label: 'Input/Output', icon: '📐' },
-  { key: 'tools', label: '도구', icon: '🔧' },
-  { key: 'knowledge', label: '지식', icon: '📚' },
   { key: 'prompt', label: '프롬프트', icon: '💬' },
-  { key: 'test', label: '테스트', icon: '▶️' },
 ] as const;
 
 type TabKey = typeof TABS[number]['key'];
@@ -180,14 +163,6 @@ function NodeEditorModal({
     )
   );
 
-  // ── Tools (라이브러리 참조) ─────────────────────────────────────────────
-  const [linkedToolIds, setLinkedToolIds] = useState<string[]>(node?.linkedToolIds || []);
-
-  // ── Knowledge ────────────────────────────────────────────────────────────
-  const [knowledgeEnabled, setKnowledgeEnabled] = useState(node?.knowledge.enabled || false);
-  const [maxChunks, setMaxChunks] = useState(node?.knowledge.maxChunks || 5);
-  const [filters, setFilters] = useState<KnowledgeFilterCondition[]>(node?.knowledge.filters || []);
-
   // ── Prompt ───────────────────────────────────────────────────────────────
   const [systemPrompt, setSystemPrompt] = useState(node?.systemPrompt || '');
   const [userPromptTemplate, setUserPromptTemplate] = useState(node?.userPromptTemplate || '');
@@ -200,7 +175,7 @@ function NodeEditorModal({
     node?.outputEnforcement || defaultOutputEnforcement
   );
 
-  // ── Derived schemas (for test tab – recomputed on every render) ──────────
+  // ── Derived schemas ──────────────────────────────────────────────────────
   const currentInputSchema = useMemo(() => {
     const { properties, required } = rowsToSchema(inputRows);
     return { type: 'object' as const, properties, required };
@@ -239,14 +214,6 @@ function NodeEditorModal({
       tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
       inputSchema,
       outputSchema,
-      linkedToolIds,
-      tools: [],  // deprecated
-      knowledge: {
-        enabled: knowledgeEnabled,
-        filters,
-        maxChunks,
-        includeInPrompt: knowledgeEnabled,
-      },
       systemPrompt,
       userPromptTemplate,
       llmConfig: {
@@ -399,64 +366,6 @@ function NodeEditorModal({
             </div>
           )}
 
-          {/* ─── TOOLS ──────────────────────────────────────────────────── */}
-          {activeTab === 'tools' && (
-            <ToolEditor linkedToolIds={linkedToolIds} onChange={setLinkedToolIds} />
-          )}
-
-          {/* ─── KNOWLEDGE ──────────────────────────────────────────────── */}
-          {activeTab === 'knowledge' && (
-            <div className="space-y-6 max-w-2xl">
-              <div className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  id="knowledge-enabled"
-                  checked={knowledgeEnabled}
-                  onChange={(e) => setKnowledgeEnabled(e.target.checked)}
-                  className="w-5 h-5 rounded accent-purple-500"
-                />
-                <label htmlFor="knowledge-enabled" className="text-white font-medium">
-                  지식 베이스 연동 활성화
-                </label>
-              </div>
-
-              {knowledgeEnabled && (
-                <>
-                  <div className="bg-gray-700 rounded-lg p-4 border-l-4 border-purple-500">
-                    <p className="text-gray-300 text-sm">
-                      지식 베이스에서 관련 문서를 검색하여 프롬프트에 포함시킵니다.
-                      아래 필터 조건으로 검색 범위를 제한할 수 있습니다.
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-2">최대 청크 수</label>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="number"
-                        value={maxChunks}
-                        onChange={(e) => setMaxChunks(Number(e.target.value))}
-                        min={1}
-                        max={20}
-                        className="w-24 bg-gray-900 border border-gray-600 rounded-lg px-4 py-2 text-gray-200 focus:outline-none focus:ring-1 focus:ring-purple-500"
-                      />
-                      <span className="text-xs text-gray-600">최대 20건</span>
-                    </div>
-                  </div>
-
-                  <KnowledgeFilterEditor filters={filters} onChange={setFilters} />
-                </>
-              )}
-
-              {!knowledgeEnabled && (
-                <div className="border border-dashed border-gray-700 rounded-lg py-8 text-center">
-                  <p className="text-gray-600 text-sm">지식 베이스 연동이 비활성화되어 있습니다</p>
-                  <p className="text-gray-700 text-xs mt-1">위 체크박스를 활성화하면 필터 설정이 표시됩니다</p>
-                </div>
-              )}
-            </div>
-          )}
-
           {/* ─── PROMPT ─────────────────────────────────────────────────── */}
           {activeTab === 'prompt' && (
             <PromptEditor
@@ -466,10 +375,6 @@ function NodeEditorModal({
               onUserPromptTemplateChange={setUserPromptTemplate}
               inputSchema={currentInputSchema}
               outputSchema={currentOutputSchema}
-              linkedTools={linkedToolIds
-                .map(id => getToolDefinitionById(id))
-                .filter((t): t is ToolDefinition => t !== undefined)}
-              knowledgeEnabled={knowledgeEnabled}
               model={model}
               temperature={temperature}
               maxTokens={maxTokens}
@@ -480,27 +385,12 @@ function NodeEditorModal({
               onOutputEnforcementChange={setOutputEnforcement}
             />
           )}
-
-          {/* ─── TEST ───────────────────────────────────────────────────── */}
-          {activeTab === 'test' && (
-            <TestTab
-              inputSchema={currentInputSchema}
-              outputSchema={currentOutputSchema}
-              tools={linkedToolIds
-                .map(id => getToolDefinitionById(id))
-                .filter(Boolean)
-                .map((t) => ({ name: t!.name, type: t!.type }))}
-              knowledgeEnabled={knowledgeEnabled}
-            />
-          )}
         </div>
 
         {/* Footer */}
         <div className="p-4 border-t border-gray-700 flex items-center justify-between">
           <div className="text-xs text-gray-600">
-            {activeTab === 'test'
-              ? '테스트 탭에서의 변경은 저장되지 않습니다'
-              : `${Object.keys(currentInputSchema.properties).length}개 입력 / ${Object.keys(currentOutputSchema.properties).length}개 출력`}
+            {`${Object.keys(currentInputSchema.properties).length}개 입력 / ${Object.keys(currentOutputSchema.properties).length}개 출력`}
           </div>
           <div className="flex gap-3">
             <button
@@ -538,7 +428,7 @@ export function NodeManagementPage() {
   const [isOnline, setIsOnline] = useState(true);
   const { toast } = useToast();
   const { setNodeContext, clearContext } = useChatAssistant();
-  const { onDataChange } = useChatContext();
+  const { onDataChange, setMode } = useChatContext();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [editingNode, setEditingNode] = useState<AINode | null | 'new'>(null);
@@ -548,6 +438,11 @@ export function NodeManagementPage() {
   useEffect(() => {
     document.title = 'AI 노드 관리 | AI 업무도우미';
   }, []);
+
+  useEffect(() => {
+    setMode('node');
+    return () => setMode('general');
+  }, [setMode]);
 
   const loadNodes = useCallback(async () => {
     setLoading(true);
@@ -643,12 +538,6 @@ export function NodeManagementPage() {
             icon: node.icon,
             color: node.color,
             tags: node.tags,
-            linkedToolIds: node.linkedToolIds,
-            knowledge: {
-              linkedIds: [],
-              filters: node.knowledge.enabled ? {} : undefined,
-              maxTokens: node.knowledge.maxChunks,
-            },
             systemPrompt: node.systemPrompt,
             userPromptTemplate: node.userPromptTemplate,
             inputSchema: node.inputSchema as unknown as Record<string, unknown>,
@@ -664,12 +553,6 @@ export function NodeManagementPage() {
             icon: node.icon,
             color: node.color,
             tags: node.tags,
-            linkedToolIds: node.linkedToolIds,
-            knowledge: {
-              linkedIds: [],
-              filters: node.knowledge.enabled ? {} : undefined,
-              maxTokens: node.knowledge.maxChunks,
-            },
             systemPrompt: node.systemPrompt,
             userPromptTemplate: node.userPromptTemplate,
             inputSchema: node.inputSchema as unknown as Record<string, unknown>,
@@ -791,16 +674,6 @@ export function NodeManagementPage() {
           <span className="text-gray-400">
             전체 노드: <span className="text-white font-medium">{nodes.length}</span>
           </span>
-          <span className="text-gray-400">
-            도구 사용: <span className="text-blue-400 font-medium">
-              {nodes.filter(n => (n.linkedToolIds?.length || 0) > 0).length}
-            </span>
-          </span>
-          <span className="text-gray-400">
-            지식 연동: <span className="text-purple-400 font-medium">
-              {nodes.filter(n => n.knowledge.enabled).length}
-            </span>
-          </span>
         </div>
       </div>
 
@@ -812,7 +685,7 @@ export function NodeManagementPage() {
               <span className="text-3xl">🤖</span>
             </div>
             <h3 className="text-lg font-medium text-gray-300 mb-2">AI 노드가 없습니다</h3>
-            <p className="text-gray-500 text-sm mb-4 max-w-md">프롬프트, 도구, 지식 베이스를 조합하여 AI 노드를 만드세요. 워크플로우에서 연결하여 사용할 수 있습니다</p>
+            <p className="text-gray-500 text-sm mb-4 max-w-md">프롬프트와 스키마를 조합하여 AI 노드를 만드세요. 워크플로우에서 연결하여 사용할 수 있습니다</p>
             <button
               onClick={() => setEditingNode('new')}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"

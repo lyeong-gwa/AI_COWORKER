@@ -1,5 +1,5 @@
 import { useRef, useState, useMemo } from 'react';
-import type { JsonSchema, ToolDefinition } from '../../types';
+import type { JsonSchema } from '../../types';
 
 // ============================================
 // 프롬프트 변수 타입
@@ -10,7 +10,6 @@ interface PromptVariable {
   template: string;
   description?: string;
   type?: string;
-  category: 'input' | 'tool' | 'knowledge';
 }
 
 // ============================================
@@ -42,7 +41,6 @@ export const defaultOutputEnforcement: OutputEnforcementConfig = {
 function VariablePalette({
   variables,
   onInsert,
-  category,
   title,
   icon,
   emptyMessage,
@@ -50,14 +48,12 @@ function VariablePalette({
 }: {
   variables: PromptVariable[];
   onInsert: (template: string) => void;
-  category: string;
   title: string;
   icon: string;
   emptyMessage: string;
   accentColor: string;
 }) {
   const [expanded, setExpanded] = useState(true);
-  const filtered = variables.filter(v => v.category === category);
 
   return (
     <div className="border border-gray-700 rounded-lg overflow-hidden">
@@ -68,17 +64,17 @@ function VariablePalette({
         <div className="flex items-center gap-2">
           <span>{icon}</span>
           <span className={`text-sm font-medium ${accentColor}`}>{title}</span>
-          <span className="text-xs text-gray-500">({filtered.length})</span>
+          <span className="text-xs text-gray-500">({variables.length})</span>
         </div>
         <span className="text-gray-500 text-xs">{expanded ? '▲' : '▼'}</span>
       </button>
 
       {expanded && (
         <div className="p-2 bg-gray-900/50 space-y-1 max-h-40 overflow-y-auto">
-          {filtered.length === 0 ? (
+          {variables.length === 0 ? (
             <p className="text-xs text-gray-600 italic px-2 py-2">{emptyMessage}</p>
           ) : (
-            filtered.map((v, idx) => (
+            variables.map((v, idx) => (
               <button
                 key={idx}
                 onClick={() => onInsert(v.template)}
@@ -191,7 +187,6 @@ function extractInputVariables(schema: JsonSchema, prefix = 'input'): PromptVari
       template,
       description: prop.description,
       type: prop.type,
-      category: 'input',
     });
 
     if (prop.type === 'object' && prop.properties) {
@@ -208,22 +203,11 @@ function extractInputVariables(schema: JsonSchema, prefix = 'input'): PromptVari
         template: `{{#each ${fullPath}}}...{{/each}}`,
         description: `${prop.description || key} 반복`,
         type: 'loop',
-        category: 'input',
       });
     }
   }
 
   return variables;
-}
-
-function extractToolVariables(tools: ToolDefinition[]): PromptVariable[] {
-  return tools.map(tool => ({
-    name: `toolResults.${tool.id}`,
-    template: `{{toolResults.${tool.id}}}`,
-    description: `${tool.name} 실행 결과`,
-    type: tool.type,
-    category: 'tool' as const,
-  }));
 }
 
 // ============================================
@@ -238,8 +222,6 @@ interface PromptEditorProps {
 
   inputSchema: JsonSchema;
   outputSchema: JsonSchema;
-  linkedTools: ToolDefinition[];
-  knowledgeEnabled: boolean;
 
   model: string;
   temperature: number;
@@ -248,7 +230,6 @@ interface PromptEditorProps {
   onTemperatureChange: (value: number) => void;
   onMaxTokensChange: (value: number) => void;
 
-  // 출력 규격 강제 설정
   outputEnforcement: OutputEnforcementConfig;
   onOutputEnforcementChange: (config: OutputEnforcementConfig) => void;
 }
@@ -264,8 +245,6 @@ export function PromptEditor({
   onUserPromptTemplateChange,
   inputSchema,
   outputSchema,
-  linkedTools,
-  knowledgeEnabled,
   model,
   temperature,
   maxTokens,
@@ -282,12 +261,6 @@ export function PromptEditor({
 
   // 변수 목록 생성
   const inputVariables = extractInputVariables(inputSchema);
-  const toolVariables = extractToolVariables(linkedTools);
-  const knowledgeVariables: PromptVariable[] = knowledgeEnabled
-    ? [{ name: 'knowledge', template: '{{knowledge}}', description: '지식 베이스 검색 결과', type: 'string', category: 'knowledge' }]
-    : [];
-
-  const allVariables = [...inputVariables, ...toolVariables, ...knowledgeVariables];
 
   // 출력 스키마 미리보기
   const schemaPreview = useMemo(() => schemaToReadableFormat(outputSchema), [outputSchema]);
@@ -574,40 +547,19 @@ ${schemaPreview}
         </div>
 
         <VariablePalette
-          variables={allVariables}
+          variables={inputVariables}
           onInsert={insertVariable}
-          category="input"
           title="INPUT 변수"
           icon="📥"
           emptyMessage="Input Schema에 필드 추가 필요"
           accentColor="text-green-400"
         />
 
-        <VariablePalette
-          variables={allVariables}
-          onInsert={insertVariable}
-          category="tool"
-          title="도구 결과"
-          icon="🔧"
-          emptyMessage="연결된 도구 없음"
-          accentColor="text-blue-400"
-        />
-
-        <VariablePalette
-          variables={allVariables}
-          onInsert={insertVariable}
-          category="knowledge"
-          title="지식 베이스"
-          icon="📚"
-          emptyMessage="지식 베이스 비활성화"
-          accentColor="text-purple-400"
-        />
-
         {/* 통계 */}
         <div className="bg-gray-900 rounded-lg p-3 border border-gray-700 text-xs text-gray-500 space-y-1">
           <div className="flex justify-between">
             <span>변수:</span>
-            <span className="text-gray-300">{allVariables.length}개</span>
+            <span className="text-gray-300">{inputVariables.length}개</span>
           </div>
           <div className="flex justify-between">
             <span>시스템:</span>

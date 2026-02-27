@@ -2,9 +2,14 @@
 Application Configuration
 """
 
+import os
+from pathlib import Path
 from typing import Optional, List
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+# backend/ 디렉토리를 기준 경로로 설정 (CWD 무관하게 동작)
+_BACKEND_DIR = str(Path(__file__).resolve().parent.parent.parent)
 
 
 class Settings(BaseSettings):

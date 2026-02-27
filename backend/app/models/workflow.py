@@ -30,6 +30,14 @@ class ExecutionStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class QueueItemStatus(str, enum.Enum):
+    """큐 아이템 상태"""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class Workflow(Base):
     """워크플로우 모델"""
     __tablename__ = "workflows"
@@ -105,6 +113,18 @@ class WorkflowNode(Base):
     # 연결된 AINode ID (프론트엔드의 nodeId)
     node_id: Mapped[str] = mapped_column(String(50), nullable=False)
 
+    # 노드 정의 타입 (manual/ai-custom/http-request 등)
+    definition_type: Mapped[str] = mapped_column(String(50), default="ai-custom", nullable=False)
+
+    # AI 노드 참조 ID (ai-custom일 때)
+    ai_node_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # 노드별 설정 (JSON)
+    config: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+
+    # 조건 분기 (condition 타입용)
+    branches: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+
     # 노드 이름 (인스턴스별 커스텀 이름)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
 
@@ -140,6 +160,10 @@ class WorkflowConnection(Base):
     # 소스/타겟
     source_node_id: Mapped[str] = mapped_column(String(50), nullable=False)
     target_node_id: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # 엣지 핸들 (분류기 등 다중 출력 노드용)
+    source_handle: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    target_handle: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # 조건 (선택적)
     condition: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
@@ -191,3 +215,31 @@ class WorkflowExecution(Base):
 
     def __repr__(self) -> str:
         return f"<WorkflowExecution {self.id}: {self.status.value}>"
+
+
+class WarehouseEntry(Base):
+    """결과 노드(창고)에 축적되는 데이터"""
+    __tablename__ = "warehouse_entries"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    node_instance_id: Mapped[str] = mapped_column(String(50), index=True)  # WorkflowNode.id
+    execution_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    data: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class NodeQueueItem(Base):
+    """공장 노드의 입력 큐 아이템 (FIFO)"""
+    __tablename__ = "node_queue_items"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    node_instance_id: Mapped[str] = mapped_column(String(50), index=True)  # WorkflowNode.id
+    execution_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    data: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[QueueItemStatus] = mapped_column(
+        SQLEnum(QueueItemStatus), default=QueueItemStatus.PENDING, nullable=False
+    )
+    result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

@@ -6,6 +6,7 @@ from .task import Task
 from .tool import ToolDefinition
 from .node import AINode
 from .workflow import Workflow, WorkflowNode, WorkflowConnection, WorkflowExecution
+from .api_definition import ApiDefinition, AuthType
 
 __all__ = [
     'Task',
@@ -15,4 +16,6 @@ __all__ = [
     'WorkflowNode',
     'WorkflowConnection',
     'WorkflowExecution',
+    'ApiDefinition',
+    'AuthType',
 ]

@@ -5,7 +5,6 @@ import type {
   AINode,
   Workflow,
   User,
-  ToolDefinition,
 } from '../types';
 
 // ============================================
@@ -58,22 +57,6 @@ export const mockColumns: TaskColumn[] = [
 // ============================================
 
 export const mockDocuments: KnowledgeDocument[] = [];
-
-// ============================================
-// Tool Definitions (라이브러리 – 중앙 관리용 도구)
-// ============================================
-
-export const mockToolDefinitions: ToolDefinition[] = [];
-
-// Helper: 도구 타입으로 필터링
-export function getToolDefinitionsByType(type: string): ToolDefinition[] {
-  return mockToolDefinitions.filter(t => t.type === type);
-}
-
-// Helper: 도구 ID로 찾기
-export function getToolDefinitionById(id: string): ToolDefinition | undefined {
-  return mockToolDefinitions.find(t => t.id === id);
-}
 
 // ============================================
 // AI Nodes (재사용 가능한 LLM 노드)

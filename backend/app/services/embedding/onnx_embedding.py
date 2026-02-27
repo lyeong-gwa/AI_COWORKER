@@ -23,6 +23,7 @@ pytorch_model.bin에서 자동 변환 (최초 1회, 이후 캐시 사용)
     └── tokenizer.json
 """
 
+import os
 import numpy as np
 from typing import List, Optional
 from pathlib import Path
@@ -54,9 +55,13 @@ class ONNXEmbeddingService:
         Args:
             model_path: ONNX 모델 디렉토리 경로 (model.onnx + tokenizer.json)
         """
-        from ...core.config import settings
+        from ...core.config import settings, _BACKEND_DIR
 
-        self.model_path = model_path or getattr(settings, 'ONNX_MODEL_PATH', None)
+        raw_path = model_path or getattr(settings, 'ONNX_MODEL_PATH', None)
+        if raw_path and not os.path.isabs(raw_path):
+            self.model_path = os.path.join(_BACKEND_DIR, raw_path)
+        else:
+            self.model_path = raw_path
 
         self._session = None
         self._tokenizer = None

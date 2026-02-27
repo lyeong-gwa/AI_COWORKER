@@ -1,20 +1,16 @@
 import { useCallback } from 'react';
 import { useChatContext } from '../contexts/ChatContext';
-import type { TaskCard, ToolDefinition, AINode, Workflow, KnowledgeDocument } from '../types';
+import type { TaskCard, AINode, Workflow, KnowledgeDocument } from '../types';
 
 /**
  * Convenience hook for setting chat context from different pages.
  * Context is set silently — user opens chat manually when needed.
  */
 export function useChatAssistant() {
-  const { setContext, clearContext } = useChatContext();
+  const { setContext, clearContext, setMode, setAction, setKnowledgeFilter } = useChatContext();
 
   const setTaskContext = useCallback((task: TaskCard) => {
     setContext({ type: 'task', data: task });
-  }, [setContext]);
-
-  const setToolContext = useCallback((tool: ToolDefinition) => {
-    setContext({ type: 'tool', data: tool });
   }, [setContext]);
 
   const setNodeContext = useCallback((node: AINode) => {
@@ -31,10 +27,12 @@ export function useChatAssistant() {
 
   return {
     setTaskContext,
-    setToolContext,
     setNodeContext,
     setWorkflowContext,
     setDocumentContext,
     clearContext,
+    setMode,
+    setAction,
+    setKnowledgeFilter,
   };
 }

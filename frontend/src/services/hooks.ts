@@ -8,17 +8,17 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   taskApi,
   knowledgeApi,
-  toolApi,
   nodeApi,
   workflowApi,
+  apiDefinitionApi,
   ApiError,
 } from './api';
 import type {
   Task,
   KnowledgeDocument,
-  ToolDefinition,
   AINode,
   Workflow,
+  ApiDefinition,
 } from '../types';
 import type { WorkflowSummary, WorkflowExecution } from './api';
 
@@ -110,35 +110,6 @@ export function useKnowledgeDocuments(category?: string): UseQueryResult<Knowled
       setLoading(false);
     }
   }, [category]);
-
-  useEffect(() => {
-    fetch();
-  }, [fetch]);
-
-  return { data, loading, error, refetch: fetch };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tool 훅
-// ─────────────────────────────────────────────────────────────────────────────
-
-export function useTools(): UseQueryResult<ToolDefinition[]> {
-  const [data, setData] = useState<ToolDefinition[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetch = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await toolApi.list();
-      setData(result);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : '데이터를 불러오는데 실패했습니다');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     fetch();
@@ -281,6 +252,31 @@ export function useWorkflowExecutions(workflowId: string | null): UseQueryResult
   }, [fetch]);
 
   return { data, loading, error, refetch: fetch };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API Definition 훅
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function useApiDefinitions() {
+  const [apiDefs, setApiDefs] = useState<ApiDefinition[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiDefinitionApi.list()
+      .then(setApiDefs)
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return { apiDefs, loading, error, refetch: () => {
+    setLoading(true);
+    apiDefinitionApi.list()
+      .then(setApiDefs)
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -23,6 +23,9 @@ class WorkflowNodeCreate(BaseModel):
     """워크플로우 노드 생성"""
     id: str
     nodeId: str  # 연결된 AINode ID
+    definitionType: str = "ai-custom"
+    aiNodeId: Optional[str] = None
+    config: Dict[str, Any] = Field(default_factory=dict)
     name: str
     position: Position = Field(default_factory=Position)
     configOverrides: Dict[str, Any] = Field(default_factory=dict)
@@ -33,6 +36,9 @@ class WorkflowNodeResponse(BaseModel):
     """워크플로우 노드 응답"""
     id: str
     nodeId: str = Field(serialization_alias="nodeId")
+    definitionType: str = Field(default="ai-custom", serialization_alias="definitionType")
+    aiNodeId: Optional[str] = Field(default=None, serialization_alias="aiNodeId")
+    config: Dict[str, Any] = Field(default_factory=dict)
     name: str
     position: Dict[str, float]
     configOverrides: Dict[str, Any] = Field(serialization_alias="configOverrides")
@@ -55,6 +61,8 @@ class WorkflowConnectionCreate(BaseModel):
     id: str
     sourceNodeId: str
     targetNodeId: str
+    sourceHandle: Optional[str] = None
+    targetHandle: Optional[str] = None
     condition: Optional[ConnectionCondition] = None
 
 
@@ -63,6 +71,8 @@ class WorkflowConnectionResponse(BaseModel):
     id: str
     sourceNodeId: str = Field(serialization_alias="sourceNodeId")
     targetNodeId: str = Field(serialization_alias="targetNodeId")
+    sourceHandle: Optional[str] = Field(None, serialization_alias="sourceHandle")
+    targetHandle: Optional[str] = Field(None, serialization_alias="targetHandle")
     condition: Optional[Dict[str, Any]] = None
 
     class Config:
@@ -76,7 +86,7 @@ class WorkflowConnectionResponse(BaseModel):
 
 class TriggerConfig(BaseModel):
     """트리거 설정"""
-    type: str = "manual"  # manual, schedule, webhook
+    type: str = "manual"  # manual, schedule, webhook, form
     config: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -198,3 +208,64 @@ class ExecutionLogEvent(BaseModel):
     timestamp: datetime
     nodeId: Optional[str] = None
     data: Dict[str, Any] = Field(default_factory=dict)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Warehouse (창고 데이터)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WarehouseEntryResponse(BaseModel):
+    """창고 항목 응답"""
+    id: str
+    nodeInstanceId: str = Field(serialization_alias="nodeInstanceId")
+    executionId: Optional[str] = Field(None, serialization_alias="executionId")
+    data: Dict[str, Any]
+    createdAt: datetime = Field(serialization_alias="createdAt")
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class WarehouseListResponse(BaseModel):
+    """창고 데이터 목록 응답"""
+    items: List[WarehouseEntryResponse]
+    total: int
+    nodeInstanceId: str = Field(serialization_alias="nodeInstanceId")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node Queue (공장 노드 입력 큐)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class QueueItemResponse(BaseModel):
+    """큐 아이템 응답"""
+    id: str
+    nodeInstanceId: str = Field(serialization_alias="nodeInstanceId")
+    executionId: Optional[str] = Field(None, serialization_alias="executionId")
+    data: Dict[str, Any]
+    status: str
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    createdAt: datetime = Field(serialization_alias="createdAt")
+    processedAt: Optional[datetime] = Field(None, serialization_alias="processedAt")
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class QueueListResponse(BaseModel):
+    """큐 목록 응답"""
+    items: List[QueueItemResponse]
+    total: int
+    pending: int
+    processing: int
+    nodeInstanceId: str = Field(serialization_alias="nodeInstanceId")
+
+
+class FactoryMapUpdate(BaseModel):
+    """팩토리 맵 업데이트"""
+    viewport: Optional[ViewportConfig] = None
+    nodes: Optional[List[WorkflowNodeCreate]] = None
+    connections: Optional[List[WorkflowConnectionCreate]] = None

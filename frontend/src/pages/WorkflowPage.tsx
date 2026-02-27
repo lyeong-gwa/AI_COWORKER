@@ -24,6 +24,8 @@ import { useToast } from '../components/common/Toast';
 import { useChatAssistant } from '../hooks/useChatAssistant';
 import { useChatContext } from '../contexts/ChatContext';
 import type { Workflow, AINode } from '../types';
+import { TriggerConfigModal } from '../components/workflow/TriggerConfigModal';
+import { ResultViewModal } from '../components/workflow/ResultViewModal';
 
 // ============================================
 // Types
@@ -33,6 +35,8 @@ interface CustomNodeData extends Record<string, unknown> {
   nodeId: string;
   instanceName: string;
   inputMapping?: Record<string, string>;
+  definitionType?: string;
+  aiNodeId?: string;
 }
 
 type NodeExecutionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
@@ -125,18 +129,6 @@ function AINodeComponent({ data, selected }: { data: CustomNodeData; selected: b
           </div>
         </div>
 
-        <div className="flex gap-1 mt-2">
-          {(aiNode.tools?.length ?? 0) > 0 && (
-            <span className="px-1.5 py-0.5 text-[10px] rounded bg-white/20 text-white">
-              tools {aiNode.tools?.length ?? 0}
-            </span>
-          )}
-          {aiNode.knowledge?.enabled && (
-            <span className="px-1.5 py-0.5 text-[10px] rounded bg-white/20 text-white">
-              knowledge
-            </span>
-          )}
-        </div>
       </div>
 
       {/* Output Handle */}
@@ -157,8 +149,100 @@ function AINodeComponent({ data, selected }: { data: CustomNodeData; selected: b
   );
 }
 
+// ============================================
+// Trigger Node Component
+// ============================================
+
+function TriggerNodeComponent({ data, selected }: { data: CustomNodeData; selected: boolean }) {
+  const icon = data.definitionType === 'schedule' ? '⏰' : data.definitionType === 'form' ? '📝' : '▶';
+  const label = data.definitionType === 'schedule' ? '스케줄 트리거' : data.definitionType === 'form' ? '폼 트리거' : '수동 트리거';
+  const bgColor = data.definitionType === 'schedule' ? 'bg-purple-700' : data.definitionType === 'form' ? 'bg-orange-700' : 'bg-gray-700';
+
+  return (
+    <div
+      className={`${bgColor} border-2 border-white/30 rounded-2xl shadow-xl min-w-[180px] transition-all ${
+        selected ? 'ring-2 ring-blue-400 ring-offset-2 ring-offset-gray-900' : ''
+      }`}
+    >
+      {/* Header */}
+      <div className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-2xl">{icon}</span>
+          <div>
+            <div className="text-white font-semibold text-sm">{data.instanceName}</div>
+            <div className="text-white/60 text-xs">{label}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Hint */}
+      <div className="px-4 pb-3">
+        <div className="text-white/50 text-[10px]">클릭하여 설정</div>
+      </div>
+
+      {/* Output Handle only (triggers are start nodes) */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="output"
+        style={{
+          background: '#374151',
+          border: '2px solid #9ca3af',
+          width: 14,
+          height: 14,
+          top: '50%',
+        }}
+        title="output"
+      />
+    </div>
+  );
+}
+
+function ResultNodeComponent({ data, selected }: { data: CustomNodeData; selected: boolean }) {
+  return (
+    <div
+      className={`bg-emerald-700 border-2 border-white/30 rounded-2xl shadow-xl min-w-[180px] transition-all ${
+        selected ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-gray-900' : ''
+      }`}
+    >
+      {/* Input Handle only (result is end node) */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="input"
+        style={{
+          background: '#374151',
+          border: '2px solid #9ca3af',
+          width: 14,
+          height: 14,
+          top: '50%',
+        }}
+        title="input"
+      />
+
+      {/* Header */}
+      <div className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-2xl">📊</span>
+          <div>
+            <div className="text-white font-semibold text-sm">{data.instanceName}</div>
+            <div className="text-emerald-200 text-xs">결과 출력</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Hint */}
+      <div className="px-4 pb-3">
+        <div className="text-emerald-300/60 text-[10px]">클릭하여 결과 확인</div>
+      </div>
+    </div>
+  );
+}
+
 const nodeTypes: NodeTypes = {
   aiNode: AINodeComponent,
+  triggerNode: TriggerNodeComponent,
+  resultNode: ResultNodeComponent,
 };
 
 // ============================================
@@ -361,7 +445,9 @@ function WorkflowCard({
               ? 'bg-green-900 text-green-300'
               : workflow.trigger.type === 'webhook'
                 ? 'bg-blue-900 text-blue-300'
-                : 'bg-gray-700 text-gray-300'
+                : workflow.trigger.type === 'form'
+                  ? 'bg-orange-900 text-orange-300'
+                  : 'bg-gray-700 text-gray-300'
           }`}
         >
           {workflow.trigger.type === 'schedule'
@@ -370,7 +456,9 @@ function WorkflowCard({
               ? '웹훅'
               : workflow.trigger.type === 'manual'
                 ? '수동'
-                : '이벤트'}
+                : workflow.trigger.type === 'form'
+                  ? '폼'
+                  : '이벤트'}
         </span>
       </div>
 
@@ -388,6 +476,22 @@ function WorkflowCard({
             <span className="text-white/80">{node.name}</span>
           </span>
         ))}
+      </div>
+
+      {/* Trigger + Result badges */}
+      <div className="flex flex-wrap gap-1 mb-2">
+        {workflow.trigger?.type && (
+          <span className="px-2 py-0.5 text-[10px] rounded bg-gray-700/60 text-gray-400 flex items-center gap-1">
+            <span>{workflow.trigger.type === 'form' ? '📝' : workflow.trigger.type === 'schedule' ? '⏰' : '▶'}</span>
+            <span>트리거</span>
+          </span>
+        )}
+        {workflow.nodes.some(n => n.definitionType === 'result') && (
+          <span className="px-2 py-0.5 text-[10px] rounded bg-emerald-900/60 text-emerald-400 flex items-center gap-1">
+            <span>📊</span>
+            <span>결과</span>
+          </span>
+        )}
       </div>
 
       {/* Tags */}
@@ -411,6 +515,14 @@ function WorkflowCard({
 // Node Palette (AI Nodes)
 // ============================================
 
+const SYSTEM_NODE_DEFS = [
+  { type: 'trigger' as const, definitionType: 'manual',   icon: '▶',  label: '수동 트리거',    desc: '수동으로 실행 시작',    bg: 'bg-gray-700',   border: 'border-gray-500',   text: 'text-gray-200'   },
+  { type: 'trigger' as const, definitionType: 'form',     icon: '📝', label: '폼 트리거',      desc: '입력 폼으로 실행 시작', bg: 'bg-orange-900', border: 'border-orange-600', text: 'text-orange-200' },
+  { type: 'trigger' as const, definitionType: 'schedule', icon: '⏰', label: '스케줄 트리거',  desc: '시간 기반 자동 실행',   bg: 'bg-purple-900', border: 'border-purple-600', text: 'text-purple-200' },
+  { type: 'trigger' as const, definitionType: 'webhook',  icon: '🔗', label: 'Webhook 트리거', desc: '외부 요청으로 실행 시작',bg: 'bg-blue-900',   border: 'border-blue-600',   text: 'text-blue-200'   },
+  { type: 'result'  as const, definitionType: 'result',   icon: '📊', label: '결과 출력',      desc: '워크플로우 최종 출력',  bg: 'bg-emerald-900',border: 'border-emerald-600',text: 'text-emerald-200'},
+];
+
 function NodePalette({ aiNodes }: { aiNodes: AINode[] }) {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -428,14 +540,25 @@ function NodePalette({ aiNodes }: { aiNodes: AINode[] }) {
     event.dataTransfer.effectAllowed = 'move';
   };
 
+  const onSystemDragStart = (
+    event: DragEvent,
+    def: (typeof SYSTEM_NODE_DEFS)[number]
+  ) => {
+    event.dataTransfer.setData(
+      'application/systemnode',
+      JSON.stringify({ type: def.type, definitionType: def.definitionType })
+    );
+    event.dataTransfer.effectAllowed = 'move';
+  };
+
   return (
     <div className="w-72 bg-gray-800 border-r border-gray-700 flex flex-col">
       {/* Header */}
       <div className="p-3 border-b border-gray-700">
-        <h3 className="text-white font-semibold mb-2">AI 노드</h3>
+        <h3 className="text-white font-semibold mb-2">노드 팔레트</h3>
         <input
           type="text"
-          placeholder="노드 검색..."
+          placeholder="AI 노드 검색..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -444,40 +567,61 @@ function NodePalette({ aiNodes }: { aiNodes: AINode[] }) {
 
       {/* Node list */}
       <div className="flex-1 overflow-auto p-2 space-y-2">
-        {filteredNodes.map((node) => (
-          <div
-            key={node.id}
-            draggable
-            onDragStart={(e) => onDragStart(e, node)}
-            className={`${node.color} bg-opacity-20 border border-gray-600 hover:border-gray-500 rounded-lg p-3 cursor-grab active:cursor-grabbing transition-colors`}
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <span className={`text-xl p-1 rounded ${node.color}`}>{node.icon}</span>
-              <div>
-                <div className="text-white font-medium text-sm">{node.name}</div>
-                <div className="text-gray-400 text-xs">{node.description}</div>
+        {/* System nodes section */}
+        <div>
+          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 mb-1">
+            시스템 노드
+          </div>
+          <div className="border-b border-gray-700 mb-2" />
+          {SYSTEM_NODE_DEFS.map((def) => (
+            <div
+              key={def.definitionType}
+              draggable
+              onDragStart={(e) => onSystemDragStart(e, def)}
+              className={`${def.bg} border ${def.border} hover:brightness-125 rounded-lg p-3 cursor-grab active:cursor-grabbing transition-all mb-2`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-xl">{def.icon}</span>
+                <div>
+                  <div className={`font-medium text-sm ${def.text}`}>{def.label}</div>
+                  <div className="text-gray-400 text-xs">{def.desc}</div>
+                </div>
               </div>
             </div>
-            <div className="flex flex-wrap gap-1">
-              {(node.tools?.length ?? 0) > 0 && (
-                <span className="px-1.5 py-0.5 text-[10px] rounded bg-blue-900 text-blue-300">
-                  tools {node.tools?.length ?? 0}
-                </span>
-              )}
-              {node.knowledge?.enabled && (
-                <span className="px-1.5 py-0.5 text-[10px] rounded bg-purple-900 text-purple-300">
-                  지식
-                </span>
-              )}
-              <span className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700 text-gray-300">
-                {node.llmConfig?.model ?? 'default'}
-              </span>
-            </div>
+          ))}
+        </div>
+
+        {/* AI nodes section */}
+        <div>
+          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 mb-1">
+            AI 노드
           </div>
-        ))}
-        {filteredNodes.length === 0 && (
-          <p className="text-gray-500 text-sm text-center py-4">검색 결과가 없습니다</p>
-        )}
+          <div className="border-b border-gray-700 mb-2" />
+          {filteredNodes.map((node) => (
+            <div
+              key={node.id}
+              draggable
+              onDragStart={(e) => onDragStart(e, node)}
+              className={`${node.color} bg-opacity-20 border border-gray-600 hover:border-gray-500 rounded-lg p-3 cursor-grab active:cursor-grabbing transition-colors mb-2`}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className={`text-xl p-1 rounded ${node.color}`}>{node.icon}</span>
+                <div>
+                  <div className="text-white font-medium text-sm">{node.name}</div>
+                  <div className="text-gray-400 text-xs">{node.description}</div>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                <span className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700 text-gray-300">
+                  {node.llmConfig?.model ?? 'default'}
+                </span>
+              </div>
+            </div>
+          ))}
+          {filteredNodes.length === 0 && (
+            <p className="text-gray-500 text-sm text-center py-4">검색 결과가 없습니다</p>
+          )}
+        </div>
       </div>
 
       {/* Help text */}
@@ -610,12 +754,8 @@ function ConfigPanel({
               <span className="text-gray-300">{aiNode.llmConfig.temperature}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-500">도구</span>
-              <span className="text-gray-300">{aiNode.tools.length}개</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">지식 연동</span>
-              <span className="text-gray-300">{aiNode.knowledge.enabled ? '활성' : '비활성'}</span>
+              <span className="text-gray-500">Max Tokens</span>
+              <span className="text-gray-300">{aiNode.llmConfig.maxTokens}</span>
             </div>
           </div>
         </div>
@@ -696,7 +836,7 @@ function ExecutionStatusPanel({
           nodeProgress.map((np) => (
             <div
               key={np.nodeInstanceId}
-              className="flex-shrink-0 bg-gray-800 border border-gray-700 rounded-lg p-3 min-w-[180px]"
+              className="flex-shrink-0 bg-gray-800 border border-gray-700 rounded-lg p-3 min-w-[180px] max-w-[300px]"
             >
               <div className="flex items-center gap-2 mb-2">
                 <div
@@ -714,12 +854,27 @@ function ExecutionStatusPanel({
                   {np.nodeInstanceId}
                 </span>
               </div>
-              <span
-                className={`px-2 py-0.5 text-xs rounded ${statusColors[np.status] || 'bg-gray-600 text-gray-300'}`}
-              >
-                {statusLabels[np.status] || np.status}
-              </span>
-              {np.error && <p className="text-red-400 text-xs mt-2 line-clamp-2">{np.error}</p>}
+              <div className="flex items-center gap-2 mb-2">
+                <span
+                  className={`px-2 py-0.5 text-xs rounded ${statusColors[np.status] || 'bg-gray-600 text-gray-300'}`}
+                >
+                  {statusLabels[np.status] || np.status}
+                </span>
+                {np.startedAt && np.completedAt && (
+                  <span className="text-gray-500 text-[10px]">
+                    {((new Date(np.completedAt).getTime() - new Date(np.startedAt).getTime()) / 1000).toFixed(1)}s
+                  </span>
+                )}
+              </div>
+              {np.error && <p className="text-red-400 text-xs mt-1 break-words">{np.error}</p>}
+              {!!np.output && (
+                <details className="mt-2">
+                  <summary className="text-gray-400 text-xs cursor-pointer hover:text-gray-300">출력 데이터</summary>
+                  <pre className="mt-1 text-[10px] text-gray-400 bg-gray-900 rounded p-2 overflow-auto max-h-32 whitespace-pre-wrap break-words">
+                    {typeof np.output === 'string' ? np.output : JSON.stringify(np.output, null, 2)}
+                  </pre>
+                </details>
+              )}
             </div>
           ))
         )}
@@ -828,6 +983,11 @@ function ExecutionHistoryPanel({
                 {exec.errorMessage && (
                   <p className="text-red-400 text-xs mt-1 line-clamp-1">{exec.errorMessage}</p>
                 )}
+                {exec.nodeResults && Object.keys(exec.nodeResults).length > 0 && (
+                  <div className="text-xs text-gray-500 mt-1">
+                    {Object.keys(exec.nodeResults).length}개 노드 실행됨
+                  </div>
+                )}
               </button>
             ))}
           </div>
@@ -845,16 +1005,22 @@ function workflowToReactFlow(workflow: Workflow): {
   nodes: Node<CustomNodeData>[];
   edges: Edge[];
 } {
-  const nodes: Node<CustomNodeData>[] = workflow.nodes.map((inst) => ({
-    id: inst.id,
-    type: 'aiNode',
-    position: inst.position,
-    data: {
-      nodeId: inst.nodeId,
-      instanceName: inst.name,
-      inputMapping: inst.inputMapping,
-    },
-  }));
+  const nodes: Node<CustomNodeData>[] = workflow.nodes.map((inst) => {
+    const isTrigger = inst.definitionType && ['manual', 'schedule', 'webhook', 'form'].includes(inst.definitionType);
+    const isResult = inst.definitionType === 'result';
+    return {
+      id: inst.id,
+      type: isTrigger ? 'triggerNode' : isResult ? 'resultNode' : 'aiNode',
+      position: inst.position,
+      data: {
+        nodeId: inst.nodeId,
+        instanceName: inst.name,
+        inputMapping: inst.inputMapping,
+        definitionType: inst.definitionType,
+        aiNodeId: inst.aiNodeId,
+      },
+    };
+  });
 
   const edges: Edge[] = workflow.connections.map((conn) => ({
     id: conn.id,
@@ -883,6 +1049,8 @@ function reactFlowToWorkflowData(
   const workflowNodes = nodes.map((n) => ({
     id: n.id,
     nodeId: n.data.nodeId,
+    definitionType: n.data.definitionType || 'ai-custom',
+    aiNodeId: n.data.aiNodeId,
     name: n.data.instanceName,
     position: { x: n.position.x, y: n.position.y },
     inputMapping: n.data.inputMapping,
@@ -933,6 +1101,15 @@ function WorkflowEditor({
   const [showHistory, setShowHistory] = useState(false);
   const [executions, setExecutions] = useState<WorkflowExecution[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // Trigger modal state
+  const [triggerModalOpen, setTriggerModalOpen] = useState(false);
+  const [selectedTriggerNode, setSelectedTriggerNode] = useState<Node<CustomNodeData> | null>(null);
+  const [triggerConfig, setTriggerConfig] = useState(workflow?.trigger || { type: 'manual', config: {} });
+
+  // Result modal state
+  const [resultModalOpen, setResultModalOpen] = useState(false);
+  const [selectedResultNode, setSelectedResultNode] = useState<Node<CustomNodeData> | null>(null);
 
   // SSE ref for cleanup
   const sseRef = useRef<EventSource | null>(null);
@@ -1015,9 +1192,13 @@ function WorkflowEditor({
       const updatedWorkflow = await workflowApi.update(workflowId, {
         name: workflowName,
         description: workflowDesc,
+        status: 'active',
+        trigger: triggerConfig,
         nodes: nodes.map((n) => ({
           id: n.id,
           nodeId: n.nodeId,
+          definitionType: n.definitionType,
+          aiNodeId: n.aiNodeId,
           name: n.name,
           position: n.position,
           inputMapping: n.inputMapping,
@@ -1039,10 +1220,18 @@ function WorkflowEditor({
     } finally {
       setSaving(false);
     }
-  }, [workflowId, workflowName, workflowDesc, toast, onWorkflowUpdated]);
+  }, [workflowId, workflowName, workflowDesc, triggerConfig, toast, onWorkflowUpdated]);
+
+  // Save trigger config handler
+  const handleSaveTriggerConfig = useCallback((newTriggerConfig: { type: string; config: Record<string, unknown> }) => {
+    setTriggerConfig(newTriggerConfig);
+    setHasUnsavedChanges(true);
+    toast.success('트리거 설정이 변경되었습니다. 저장 버튼을 눌러 적용하세요.');
+    setTriggerModalOpen(false);
+  }, [toast]);
 
   // Execute handler
-  const handleExecute = useCallback(async () => {
+  const handleExecute = useCallback(async (inputData?: Record<string, unknown>) => {
     if (!workflowId) {
       toast.warning('실행할 워크플로우가 없습니다');
       return;
@@ -1054,7 +1243,7 @@ function WorkflowEditor({
     setCurrentExecution(null);
 
     try {
-      const execution = await workflowApi.execute(workflowId);
+      const execution = await workflowApi.execute(workflowId, inputData || {});
       setCurrentExecution(execution);
 
       // Initialize node progress from workflow nodes
@@ -1076,52 +1265,56 @@ function WorkflowEditor({
           try {
             const data = JSON.parse(event.data);
 
-            // Update execution status
-            if (data.executionStatus) {
+            // Update execution status (backend sends "status", not "executionStatus")
+            if (data.status) {
               setCurrentExecution((prev) =>
                 prev
                   ? {
                       ...prev,
-                      status: data.executionStatus,
+                      status: data.status,
                       completedAt: data.completedAt,
-                      errorMessage: data.errorMessage,
+                      errorMessage: data.error,
                     }
                   : prev
               );
             }
 
-            // Update individual node progress
-            if (data.nodeInstanceId && data.nodeStatus) {
+            // Update node progress from nodeResults dictionary
+            if (data.nodeResults && typeof data.nodeResults === 'object') {
               setNodeProgress((prev) =>
-                prev.map((np) =>
-                  np.nodeInstanceId === data.nodeInstanceId
-                    ? {
-                        ...np,
-                        status: data.nodeStatus,
-                        output: data.output,
-                        error: data.error,
-                        startedAt: data.startedAt || np.startedAt,
-                        completedAt: data.completedAt || np.completedAt,
-                      }
-                    : np
-                )
+                prev.map((np) => {
+                  const result = (data.nodeResults as Record<string, Record<string, unknown>>)[
+                    np.nodeInstanceId
+                  ];
+                  if (result) {
+                    return {
+                      ...np,
+                      status: (result.status as NodeExecutionStatus) || np.status,
+                      output: result.outputData,
+                      error: result.error as string | undefined,
+                      startedAt: (result.startTime as string) || np.startedAt,
+                      completedAt: (result.endTime as string) || np.completedAt,
+                    };
+                  }
+                  return np;
+                })
               );
             }
 
             // Check if execution is done
             if (
-              data.executionStatus === 'completed' ||
-              data.executionStatus === 'failed' ||
-              data.executionStatus === 'cancelled'
+              data.status === 'completed' ||
+              data.status === 'failed' ||
+              data.status === 'cancelled'
             ) {
               es.close();
               sseRef.current = null;
               setExecuting(false);
 
-              if (data.executionStatus === 'completed') {
+              if (data.status === 'completed') {
                 toast.success('워크플로우 실행이 완료되었습니다');
-              } else if (data.executionStatus === 'failed') {
-                toast.error(`실행 실패: ${data.errorMessage || '알 수 없는 오류'}`);
+              } else if (data.status === 'failed') {
+                toast.error(`실행 실패: ${data.error || '알 수 없는 오류'}`);
               }
             }
           } catch {
@@ -1165,8 +1358,10 @@ function WorkflowEditor({
                   return {
                     ...np,
                     status: (result.status as NodeExecutionStatus) || np.status,
-                    output: result.output,
+                    output: result.outputData,
                     error: result.error as string | undefined,
+                    startedAt: (result.startTime as string) || np.startedAt,
+                    completedAt: (result.endTime as string) || np.completedAt,
                   };
                 }
                 return np;
@@ -1283,7 +1478,7 @@ function WorkflowEditor({
             <span>저장</span>
           </button>
           <button
-            onClick={handleExecute}
+            onClick={() => handleExecute()}
             disabled={executing}
             className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm flex items-center gap-2 disabled:opacity-50"
           >
@@ -1303,6 +1498,14 @@ function WorkflowEditor({
               aiNodes={aiNodes}
               onCanvasChange={() => setHasUnsavedChanges(true)}
               getCanvasStateRef={getCanvasStateRef}
+              onTriggerNodeClick={(node) => {
+                setSelectedTriggerNode(node);
+                setTriggerModalOpen(true);
+              }}
+              onResultNodeClick={(node) => {
+                setSelectedResultNode(node);
+                setResultModalOpen(true);
+              }}
             />
             {/* Execution Status Panel (bottom) */}
             {showExecutionPanel && (
@@ -1341,6 +1544,56 @@ function WorkflowEditor({
         )}
       </div>
 
+      {/* Trigger Config Modal */}
+      {triggerModalOpen && selectedTriggerNode && workflow && (
+        <TriggerConfigModal
+          isOpen={triggerModalOpen}
+          onClose={() => {
+            setTriggerModalOpen(false);
+            setSelectedTriggerNode(null);
+          }}
+          triggerConfig={triggerConfig}
+          triggerNode={selectedTriggerNode as any}
+          triggerNodeId={selectedTriggerNode?.id ?? ''}
+          allNodes={(getCanvasStateRef.current?.().nodes || []) as any[]}
+          edges={getCanvasStateRef.current?.().edges || []}
+          aiNodes={aiNodes}
+          onSaveTrigger={handleSaveTriggerConfig}
+          onExecute={(data) => {
+            setTriggerModalOpen(false);
+            handleExecute(data);
+          }}
+          executing={executing}
+        />
+      )}
+
+      {/* Result View Modal */}
+      {resultModalOpen && selectedResultNode && workflowId && (
+        <ResultViewModal
+          isOpen={resultModalOpen}
+          onClose={() => {
+            setResultModalOpen(false);
+            setSelectedResultNode(null);
+          }}
+          resultNodeId={selectedResultNode.id}
+          resultNodeName={selectedResultNode.data.instanceName}
+          onReExecute={() => {
+            setResultModalOpen(false);
+            setSelectedResultNode(null);
+            // Find trigger node and open trigger modal, or execute directly
+            const triggerNode = getCanvasStateRef.current?.().nodes.find(
+              n => n.type === 'triggerNode'
+            );
+            if (triggerNode) {
+              setSelectedTriggerNode(triggerNode);
+              setTriggerModalOpen(true);
+            } else {
+              handleExecute();
+            }
+          }}
+        />
+      )}
+
       <ConfirmDialog
         open={showDeleteConfirm}
         title="워크플로우 삭제"
@@ -1362,6 +1615,8 @@ function WorkflowCanvas({
   aiNodes,
   onCanvasChange,
   getCanvasStateRef,
+  onTriggerNodeClick,
+  onResultNodeClick,
 }: {
   initialWorkflow: Workflow | null;
   aiNodes: AINode[];
@@ -1369,6 +1624,8 @@ function WorkflowCanvas({
   getCanvasStateRef: React.MutableRefObject<
     (() => { nodes: Node<CustomNodeData>[]; edges: Edge[]; viewport: Viewport }) | null
   >;
+  onTriggerNodeClick?: (node: Node<CustomNodeData>) => void;
+  onResultNodeClick?: (node: Node<CustomNodeData>) => void;
 }) {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
@@ -1443,6 +1700,42 @@ function WorkflowCanvas({
     (event: DragEvent) => {
       event.preventDefault();
 
+      // Check for system node first
+      const systemData = event.dataTransfer.getData('application/systemnode');
+      if (systemData) {
+        const { type, definitionType } = JSON.parse(systemData) as {
+          type: 'trigger' | 'result';
+          definitionType: string;
+        };
+        const position = screenToFlowPosition({
+          x: event.clientX,
+          y: event.clientY,
+        });
+
+        const instanceName =
+          definitionType === 'manual'   ? '수동 트리거'    :
+          definitionType === 'form'     ? '폼 트리거'      :
+          definitionType === 'schedule' ? '스케줄 트리거'  :
+          definitionType === 'webhook'  ? 'Webhook 트리거' :
+          '결과 출력';
+
+        const newNode: Node<CustomNodeData> = {
+          id: `inst-${Date.now()}`,
+          type: type === 'result' ? 'resultNode' : 'triggerNode',
+          position,
+          data: {
+            nodeId: `system-${definitionType}`,
+            instanceName,
+            definitionType,
+          },
+        };
+
+        setNodes((nds) => nds.concat(newNode));
+        onCanvasChange();
+        return;
+      }
+
+      // Then check for AI node
       const data = event.dataTransfer.getData('application/ainode');
       if (!data) return;
 
@@ -1471,8 +1764,14 @@ function WorkflowCanvas({
   );
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node<CustomNodeData>) => {
-    setSelectedNode(node);
-  }, []);
+    if (node.type === 'triggerNode' && onTriggerNodeClick) {
+      onTriggerNodeClick(node);
+    } else if (node.type === 'resultNode' && onResultNodeClick) {
+      onResultNodeClick(node);
+    } else {
+      setSelectedNode(node);
+    }
+  }, [onTriggerNodeClick, onResultNodeClick]);
 
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
@@ -1533,6 +1832,8 @@ function WorkflowCanvas({
             <Controls className="bg-gray-800 border-gray-700" />
             <MiniMap
               nodeColor={(node) => {
+                if (node.type === 'triggerNode') return '#6b21a8';
+                if (node.type === 'resultNode') return '#047857';
                 const nodeData = node.data as CustomNodeData;
                 const aiNode = aiNodes.find(n => n.id === nodeData?.nodeId);
                 if (!aiNode) return '#6b7280';
@@ -1572,7 +1873,7 @@ function WorkflowCanvas({
 
 export function WorkflowPage() {
   const { toast } = useToast();
-  const { onDataChange } = useChatContext();
+  const { onDataChange, setMode } = useChatContext();
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [aiNodes, setAINodes] = useState<AINode[]>(mockAINodes);
   const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null>(null);
@@ -1583,6 +1884,11 @@ export function WorkflowPage() {
   useEffect(() => {
     document.title = '워크플로우 | AI 업무도우미';
   }, []);
+
+  useEffect(() => {
+    setMode('workflow');
+    return () => setMode('general');
+  }, [setMode]);
 
   // Load workflows and AI nodes on mount
   const loadData = useCallback(async () => {

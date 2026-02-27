@@ -19,6 +19,7 @@ const CATEGORY_OPTIONS = [
   { value: 'product', label: '제품 정보' },
   { value: 'internal', label: '내부 문서' },
   { value: 'guide', label: '가이드' },
+  { value: '도구-API', label: '도구-API' },
   { value: 'etc', label: '기타' },
 ];
 
@@ -439,7 +440,7 @@ function DocumentDetailModal({
   isApiMode: boolean;
 }) {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<'content' | 'vector'>('content');
+  const [activeTab, setActiveTab] = useState<'content' | 'vector' | 'api'>('content');
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -452,6 +453,16 @@ function DocumentDetailModal({
   const [editCategory, setEditCategory] = useState(doc.category);
   const [editTags, setEditTags] = useState(doc.tags.join(', '));
 
+  // API metadata state
+  const [editApiMethod, setEditApiMethod] = useState((doc as any).api?.method || 'GET');
+  const [editApiUrl, setEditApiUrl] = useState((doc as any).api?.url || '');
+  const [editApiHeaders, setEditApiHeaders] = useState<{key: string; value: string}[]>(
+    (doc as any).api?.headers
+      ? Object.entries((doc as any).api.headers as Record<string, string>).map(([key, value]) => ({ key, value }))
+      : []
+  );
+  const [editApiBody, setEditApiBody] = useState((doc as any).api?.bodyTemplate || '');
+
   const status = syncStatusConfig[doc.syncStatus];
 
   const handleStartEdit = () => {
@@ -459,6 +470,15 @@ function DocumentDetailModal({
     setEditContent(doc.content);
     setEditCategory(doc.category);
     setEditTags(doc.tags.join(', '));
+    // Reset API fields
+    setEditApiMethod((doc as any).api?.method || 'GET');
+    setEditApiUrl((doc as any).api?.url || '');
+    setEditApiHeaders(
+      (doc as any).api?.headers
+        ? Object.entries((doc as any).api.headers as Record<string, string>).map(([key, value]) => ({ key, value }))
+        : []
+    );
+    setEditApiBody((doc as any).api?.bodyTemplate || '');
     setIsEditing(true);
   };
 
@@ -480,12 +500,20 @@ function DocumentDetailModal({
 
     try {
       if (isApiMode) {
+        const apiMeta = editCategory === '\uB3C4\uAD6C-API' && editApiUrl ? {
+          method: editApiMethod,
+          url: editApiUrl,
+          headers: Object.fromEntries(editApiHeaders.filter(h => h.key.trim()).map(h => [h.key, h.value])),
+          ...(editApiBody ? { bodyTemplate: editApiBody } : {}),
+        } : undefined;
+
         const updated = await knowledgeApi.update(doc.id, {
           title: editTitle.trim(),
           content: editContent,
           category: editCategory,
           tags,
-        });
+          ...(apiMeta ? { api: apiMeta } : {}),
+        } as any);
         onUpdated(updated);
         toast.success('문서가 수정되었습니다.');
       } else {
@@ -612,6 +640,18 @@ function DocumentDetailModal({
             >
               {'\uD83D\uDCDD'} 내용
             </button>
+            {doc.category === '\uB3C4\uAD6C-API' && (
+              <button
+                onClick={() => setActiveTab('api')}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  activeTab === 'api'
+                    ? 'text-cyan-400 border-b-2 border-cyan-400'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                {'\uD83C\uDF10'} API 설정
+              </button>
+            )}
             <button
               onClick={() => setActiveTab('vector')}
               className={`px-4 py-2 text-sm font-medium transition-colors ${
@@ -709,6 +749,137 @@ function DocumentDetailModal({
                       </span>
                     </div>
                   </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'api' && (
+              <div className="p-4 space-y-4">
+                {isEditing ? (
+                  <>
+                    {/* Method + URL */}
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">요청</label>
+                      <div className="flex gap-2">
+                        <select
+                          value={editApiMethod}
+                          onChange={(e) => setEditApiMethod(e.target.value)}
+                          className="px-3 py-2 rounded-lg text-sm font-bold bg-gray-700 text-white border-none"
+                        >
+                          {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                        <input
+                          value={editApiUrl}
+                          onChange={(e) => setEditApiUrl(e.target.value)}
+                          placeholder="https://api.example.com/v1/{{resource}}"
+                          className="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                        />
+                      </div>
+                      {editApiUrl && !editApiUrl.startsWith('http') && (
+                        <p className="text-red-400 text-[10px] mt-1">URL은 http:// 또는 https://로 시작해야 합니다</p>
+                      )}
+                    </div>
+
+                    {/* Headers */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs text-gray-400">헤더</label>
+                        <button
+                          onClick={() => setEditApiHeaders(prev => [...prev, { key: '', value: '' }])}
+                          className="text-xs text-cyan-400 hover:text-cyan-300"
+                        >+ 추가</button>
+                      </div>
+                      <div className="space-y-1.5">
+                        {editApiHeaders.map((h, i) => (
+                          <div key={i} className="flex gap-2">
+                            <input
+                              value={h.key}
+                              onChange={(e) => setEditApiHeaders(prev => prev.map((hh, idx) => idx === i ? { ...hh, key: e.target.value } : hh))}
+                              placeholder="Header-Name"
+                              className="w-1/3 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                            />
+                            <input
+                              value={h.value}
+                              onChange={(e) => setEditApiHeaders(prev => prev.map((hh, idx) => idx === i ? { ...hh, value: e.target.value } : hh))}
+                              placeholder="value or {{variable}}"
+                              className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                            />
+                            <button
+                              onClick={() => setEditApiHeaders(prev => prev.filter((_, idx) => idx !== i))}
+                              className="text-gray-500 hover:text-red-400 text-xs px-1"
+                            >{'\u2715'}</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Body template */}
+                    {['POST', 'PUT', 'PATCH'].includes(editApiMethod) && (
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">바디 템플릿</label>
+                        <textarea
+                          value={editApiBody}
+                          onChange={(e) => setEditApiBody(e.target.value)}
+                          rows={5}
+                          placeholder='{ "field": "{{variable}}" }'
+                          className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-200 font-mono resize-y focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                        />
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {/* Read-only API display */}
+                    {(doc as any).api ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-1 text-xs rounded font-bold ${
+                            (doc as any).api.method === 'GET' ? 'bg-green-600/40 text-green-300' :
+                            (doc as any).api.method === 'POST' ? 'bg-blue-600/40 text-blue-300' :
+                            (doc as any).api.method === 'PUT' ? 'bg-amber-600/40 text-amber-300' :
+                            (doc as any).api.method === 'DELETE' ? 'bg-red-600/40 text-red-300' :
+                            'bg-gray-600/40 text-gray-300'
+                          }`}>
+                            {(doc as any).api.method}
+                          </span>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">URL</label>
+                          <div className="bg-gray-900 rounded-lg p-2.5 text-xs text-gray-300 font-mono break-all">
+                            {(doc as any).api.url}
+                          </div>
+                        </div>
+                        {(doc as any).api.headers && Object.keys((doc as any).api.headers).length > 0 && (
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">헤더</label>
+                            <div className="bg-gray-900 rounded-lg p-2.5 space-y-1">
+                              {Object.entries((doc as any).api.headers as Record<string, string>).map(([k, v]) => (
+                                <div key={k} className="flex gap-2 text-xs">
+                                  <span className="text-cyan-300 font-mono">{k}:</span>
+                                  <span className="text-gray-400 font-mono">{v}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {(doc as any).api.bodyTemplate && (
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">바디 템플릿</label>
+                            <pre className="bg-gray-900 rounded-lg p-2.5 text-xs text-gray-300 font-mono whitespace-pre-wrap">
+                              {(doc as any).api.bodyTemplate}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-center py-8">
+                        <p className="text-gray-500 text-sm">API 설정이 없습니다</p>
+                        <p className="text-gray-600 text-xs mt-1">편집 모드에서 API 설정을 추가할 수 있습니다</p>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -847,7 +1018,7 @@ function DocumentDetailModal({
 export function KnowledgeBasePage() {
   const { toast } = useToast();
   const { setDocumentContext, clearContext } = useChatAssistant();
-  const { onDataChange } = useChatContext();
+  const { onDataChange, setMode, setKnowledgeFilter } = useChatContext();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Data state
@@ -860,6 +1031,7 @@ export function KnowledgeBasePage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [searchMode, setSearchMode] = useState<'normal' | 'vector'>('normal');
 
   // Vector search state
@@ -966,6 +1138,13 @@ export function KnowledgeBasePage() {
       result = result.filter((doc) => doc.category === categoryFilter);
     }
 
+    // Tag filter (OR logic)
+    if (selectedTags.length > 0) {
+      result = result.filter((doc) =>
+        selectedTags.some((tag) => doc.tags.includes(tag))
+      );
+    }
+
     // Text search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -979,7 +1158,23 @@ export function KnowledgeBasePage() {
     }
 
     return result;
-  }, [documents, searchQuery, categoryFilter, searchMode]);
+  }, [documents, searchQuery, categoryFilter, selectedTags, searchMode]);
+
+  // ── Auto-set chat mode on mount/unmount ──────────────────────────
+  useEffect(() => {
+    setMode('knowledge');
+    return () => setMode('general');
+  }, [setMode]);
+
+  // ── Push knowledge filter to chat context ────────────────────────
+  useEffect(() => {
+    setKnowledgeFilter({
+      category: categoryFilter || undefined,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      visibleDocIds: filteredDocs.map(d => d.id),
+    });
+    return () => setKnowledgeFilter(null);
+  }, [categoryFilter, selectedTags, filteredDocs, setKnowledgeFilter]);
 
   // ── Vector search ──────────────────────────────────────────────────────────
 
@@ -1022,7 +1217,7 @@ export function KnowledgeBasePage() {
       total: documents.length,
       synced: documents.filter((d) => d.syncStatus === 'synced').length,
       pending: documents.filter((d) => d.syncStatus === 'modified').length,
-      error: documents.filter((d) => d.syncStatus === 'not_synced').length,
+      notSynced: documents.filter((d) => d.syncStatus === 'not_synced').length,
     }),
     [documents]
   );
@@ -1044,6 +1239,14 @@ export function KnowledgeBasePage() {
     setDocuments((prev) => prev.filter((d) => d.id !== id));
     setSelectedDoc(null);
   };
+
+  // ── Unique tags from documents ───────────────────────────────────────────
+
+  const availableTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    documents.forEach(d => d.tags.forEach(t => tagSet.add(t)));
+    return Array.from(tagSet).sort();
+  }, [documents]);
 
   // ── Unique categories from documents ───────────────────────────────────────
 
@@ -1077,13 +1280,15 @@ export function KnowledgeBasePage() {
               )}
             </p>
           </div>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-          >
-            <span>+</span>
-            <span>문서 추가</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm"
+            >
+              <span>+</span>
+              <span>문서 추가</span>
+            </button>
+          </div>
         </div>
 
         {/* Stats, Category Filter & Search */}
@@ -1095,7 +1300,7 @@ export function KnowledgeBasePage() {
             </span>
             <span className="text-green-400">{'\u2713'} 동기화: {syncStats.synced}</span>
             <span className="text-yellow-400">{'\u23F3'} 대기: {syncStats.pending}</span>
-            <span className="text-red-400">{'\u2715'} 오류: {syncStats.error}</span>
+            <span className="text-gray-400">{'\u25CB'} 미동기화: {syncStats.notSynced}</span>
           </div>
 
           <div className="flex items-center gap-3">
@@ -1111,6 +1316,36 @@ export function KnowledgeBasePage() {
                 </option>
               ))}
             </select>
+
+            {/* Tag Filter Chips */}
+            {availableTags.length > 0 && (
+              <div className="flex items-center gap-1 max-w-[300px] overflow-x-auto">
+                {availableTags.slice(0, 8).map(tag => (
+                  <button
+                    key={tag}
+                    onClick={() => setSelectedTags(prev =>
+                      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+                    )}
+                    className={`px-2 py-0.5 rounded text-xs whitespace-nowrap transition-colors ${
+                      selectedTags.includes(tag)
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-700 text-gray-400 hover:text-white hover:bg-gray-600'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+                {selectedTags.length > 0 && (
+                  <button
+                    onClick={() => setSelectedTags([])}
+                    className="px-1.5 py-0.5 text-xs text-gray-500 hover:text-white"
+                    title="태그 필터 초기화"
+                  >
+                    {'\u00D7'}
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Search Mode Toggle */}
             <div className="flex bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
@@ -1260,6 +1495,7 @@ export function KnowledgeBasePage() {
           isApiMode={isApiMode}
         />
       )}
+
     </div>
   );
 }

@@ -49,7 +49,9 @@ class VectorDatabase:
             persist_dir: 데이터 저장 경로
             collection_name: 컬렉션 이름
         """
-        self.persist_dir = persist_dir or os.getenv("CHROMA_PERSIST_DIR", "./data/chroma")
+        from ...core.config import _BACKEND_DIR
+        raw_dir = persist_dir or os.getenv("CHROMA_PERSIST_DIR", "./data/chroma")
+        self.persist_dir = os.path.join(_BACKEND_DIR, raw_dir) if not os.path.isabs(raw_dir) else raw_dir
         self.collection_name = collection_name
 
         self._client = None

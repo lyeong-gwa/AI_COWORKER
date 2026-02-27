@@ -203,27 +203,19 @@ export const knowledgeApi = {
   /** 유사도 검색 */
   search: (data: SearchKnowledgeData): Promise<KnowledgeSearchResult[]> =>
     request('/knowledge/search', { method: 'POST', body: JSON.stringify(data) }),
+
+  /** 고유 카테고리/태그 목록 조회 */
+  meta: (): Promise<{ categories: string[]; tags: string[] }> =>
+    request('/knowledge/meta'),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tool API
+// API Docs API (api-call 노드용 API 문서)
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { ToolDefinition, ToolType, ToolConfig } from '../types';
+import type { ApiDocSummary } from '../types';
 
-export interface CreateToolData {
-  name: string;
-  description: string;
-  type: ToolType;
-  icon?: string;
-  color?: string;
-  config: ToolConfig;
-  tags?: string[];
-}
-
-export interface UpdateToolData extends Partial<Omit<CreateToolData, 'type'>> {}
-
-export interface ToolTestResult {
+export interface ApiTestResult {
   success: boolean;
   output?: unknown;
   error?: string;
@@ -231,30 +223,74 @@ export interface ToolTestResult {
   logs: string[];
 }
 
-export const toolApi = {
-  /** 도구 목록 조회 */
-  list: (type?: ToolType): Promise<ToolDefinition[]> =>
-    request(`/tools${type ? `?type=${type}` : ''}`),
+export const apiDocsApi = {
+  /** API 지식 문서 목록 조회 */
+  listApiDocs: (): Promise<ApiDocSummary[]> =>
+    request('/tools/api-docs'),
 
-  /** 도구 상세 조회 */
-  get: (id: string): Promise<ToolDefinition> =>
-    request(`/tools/${id}`),
+  /** 지식 문서 기반 API 호출 실행 */
+  executeApiDoc: (docId: string, inputData: Record<string, unknown>): Promise<ApiTestResult> =>
+    request('/tools/execute-api-doc', { method: 'POST', body: JSON.stringify({ docId, inputData }) }),
 
-  /** 도구 생성 */
-  create: (data: CreateToolData): Promise<ToolDefinition> =>
-    request('/tools', { method: 'POST', body: JSON.stringify(data) }),
+  /** 원시 API 호출 테스트 (Postman 스타일) */
+  testRawApi: (params: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    bodyTemplate?: string;
+    inputData: Record<string, string>;
+  }): Promise<ApiTestResult> =>
+    request('/tools/test-raw-api', { method: 'POST', body: JSON.stringify(params) }),
+};
 
-  /** 도구 수정 */
-  update: (id: string, data: UpdateToolData): Promise<ToolDefinition> =>
-    request(`/tools/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+// ─────────────────────────────────────────────────────────────────────────────
+// API Definition API
+// ─────────────────────────────────────────────────────────────────────────────
 
-  /** 도구 삭제 */
+import type { ApiDefinition, CreateApiDefinitionData, UpdateApiDefinitionData } from '../types';
+
+// ─── API Definition API ───────────────────────────────────────────────────────
+
+export const apiDefinitionApi = {
+  /** API 정의 목록 조회 */
+  list: (params?: { category?: string }): Promise<ApiDefinition[]> => {
+    const query = params?.category ? `?category=${encodeURIComponent(params.category)}` : '';
+    return request(`/api-definitions${query}`);
+  },
+
+  /** API 정의 단건 조회 */
+  get: (id: string): Promise<ApiDefinition> =>
+    request(`/api-definitions/${id}`),
+
+  /** API 정의 생성 */
+  create: (data: CreateApiDefinitionData): Promise<ApiDefinition> =>
+    request('/api-definitions', { method: 'POST', body: JSON.stringify(data) }),
+
+  /** API 정의 수정 */
+  update: (id: string, data: UpdateApiDefinitionData): Promise<ApiDefinition> =>
+    request(`/api-definitions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+  /** API 정의 삭제 */
   delete: (id: string): Promise<void> =>
-    request(`/tools/${id}`, { method: 'DELETE' }),
+    request(`/api-definitions/${id}`, { method: 'DELETE' }),
 
-  /** 도구 테스트 */
-  test: (id: string, inputData: Record<string, unknown>): Promise<ToolTestResult> =>
-    request(`/tools/${id}/test`, { method: 'POST', body: JSON.stringify({ inputData }) }),
+  /** API 정의 기반 호출 실행 */
+  execute: (id: string, inputData: Record<string, unknown>): Promise<ApiTestResult> =>
+    request(`/api-definitions/${id}/execute`, { method: 'POST', body: JSON.stringify({ inputData }) }),
+
+  /** 원시 API 테스트 (Postman 스타일) */
+  testApi: (params: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    bodyTemplate?: string;
+    inputData: Record<string, string>;
+  }): Promise<ApiTestResult> =>
+    request('/api-definitions/test-api', { method: 'POST', body: JSON.stringify(params) }),
+
+  /** 테스트 응답에서 자동 스키마 추출 */
+  capture: (responseData: unknown, urlTemplate?: string): Promise<{ parameters: any[]; responseSchema: any }> =>
+    request('/api-definitions/capture', { method: 'POST', body: JSON.stringify({ responseData, urlTemplate: urlTemplate || '' }) }),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -269,12 +305,6 @@ export interface CreateNodeData {
   icon?: string;
   color?: string;
   tags?: string[];
-  linkedToolIds?: string[];
-  knowledge?: {
-    linkedIds: string[];
-    filters?: Record<string, unknown>;
-    maxTokens?: number;
-  };
   systemPrompt?: string;
   userPromptTemplate?: string;
   inputSchema?: Record<string, unknown>;
@@ -304,7 +334,6 @@ export interface NodeTestResult {
   errorType?: string;
   logs: Array<{ timestamp: string; level: string; message: string; data?: unknown }>;
   renderedPrompt?: string;
-  toolResults?: Record<string, unknown>;
   llmResponse?: string;
   validationPassed?: boolean;
   validationErrors?: string[];
@@ -337,12 +366,10 @@ export const nodeApi = {
   test: (
     id: string,
     inputData: Record<string, unknown>,
-    mockToolResults?: Record<string, unknown>,
-    mockKnowledge?: string
   ): Promise<NodeTestResult> =>
     request(`/nodes/${id}/test`, {
       method: 'POST',
-      body: JSON.stringify({ inputData, mockToolResults, mockKnowledge }),
+      body: JSON.stringify({ inputData }),
     }),
 };
 
@@ -362,6 +389,8 @@ export interface CreateWorkflowData {
   nodes?: Array<{
     id: string;
     nodeId: string;
+    definitionType?: string;
+    aiNodeId?: string;
     name: string;
     position: { x: number; y: number };
     configOverrides?: Record<string, unknown>;
@@ -448,6 +477,94 @@ export const workflowApi = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Factory API (Factorio-style singleton factory map)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type { FactoryMap, WarehouseListResponse, QueueListResponse } from '../types';
+
+export interface FactoryMapUpdateData {
+  viewport?: { x: number; y: number; zoom: number };
+  nodes?: Array<{
+    id: string;
+    nodeId: string;
+    definitionType?: string;
+    aiNodeId?: string;
+    name: string;
+    position: { x: number; y: number };
+    config?: Record<string, unknown>;
+    configOverrides?: Record<string, unknown>;
+    inputMapping?: Record<string, string>;
+  }>;
+  connections?: Array<{
+    id: string;
+    sourceNodeId: string;
+    targetNodeId: string;
+    sourceHandle?: string;
+    targetHandle?: string;
+    condition?: { field: string; operator: string; value: unknown };
+  }>;
+}
+
+export const factoryApi = {
+  /** 싱글톤 팩토리 맵 조회 (없으면 자동 생성) */
+  getMap: (): Promise<FactoryMap> =>
+    request('/factory'),
+
+  /** 팩토리 맵 저장 (노드, 연결, 뷰포트) */
+  saveMap: (data: FactoryMapUpdateData): Promise<FactoryMap> =>
+    request('/factory', { method: 'PATCH', body: JSON.stringify(data) }),
+
+  /** 팩토리 전체 실행 */
+  execute: (inputData: Record<string, unknown> = {}): Promise<WorkflowExecution> =>
+    request('/factory/execute', { method: 'POST', body: JSON.stringify({ inputData }) }),
+
+  /** 실행 이력 조회 */
+  listExecutions: (limit: number = 20): Promise<WorkflowExecution[]> =>
+    request(`/factory/executions?limit=${limit}`),
+
+  /** 실행 상세 조회 */
+  getExecution: (executionId: string): Promise<WorkflowExecution> =>
+    request(`/factory/executions/${executionId}`),
+
+  /** 실행 취소 */
+  cancelExecution: (executionId: string): Promise<{ message: string }> =>
+    request(`/factory/executions/${executionId}/cancel`, { method: 'POST' }),
+
+  /** 실행 스트리밍 (SSE) */
+  streamExecution: (executionId: string): EventSource => {
+    return new EventSource(`${API_BASE}/factory/executions/${executionId}/stream`);
+  },
+
+  /** 창고 데이터 조회 */
+  getWarehouse: (nodeId: string, limit: number = 50): Promise<WarehouseListResponse> =>
+    request(`/factory/warehouse/${nodeId}?limit=${limit}`),
+
+  /** 창고 비우기 */
+  clearWarehouse: (nodeId: string): Promise<void> =>
+    request(`/factory/warehouse/${nodeId}`, { method: 'DELETE' }),
+
+  /** 창고 항목 선택 삭제 */
+  deleteWarehouseEntries: (nodeId: string, entryIds: string[]): Promise<void> =>
+    request(`/factory/warehouse/${nodeId}/entries?${entryIds.map(id => `ids=${id}`).join('&')}`, { method: 'DELETE' }),
+
+  /** 공장 노드 큐 조회 */
+  getQueue: (nodeId: string, limit: number = 50): Promise<QueueListResponse> =>
+    request(`/factory/queue/${nodeId}?limit=${limit}`),
+
+  /** 공장 노드 큐 카운트 (빠른 조회) */
+  getQueueCount: (nodeId: string): Promise<{ nodeInstanceId: string; total: number; pending: number; processing: number }> =>
+    request(`/factory/queue/${nodeId}/count`),
+
+  /** 공장 노드 큐 비우기 */
+  clearQueue: (nodeId: string, status?: string): Promise<void> =>
+    request(`/factory/queue/${nodeId}${status ? `?status=${status}` : ''}`, { method: 'DELETE' }),
+
+  /** 노드 삭제 */
+  deleteNode: (nodeId: string): Promise<void> =>
+    request(`/factory/nodes/${nodeId}`, { method: 'DELETE' }),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Chat API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -460,6 +577,13 @@ export interface ChatMessageRequest {
     id?: string;
   };
   sessionId?: string;
+  mode?: string;
+  action?: string;
+  knowledgeFilter?: {
+    category?: string;
+    tags?: string[];
+    visibleDocIds?: string[];
+  };
 }
 
 export interface AgentAction {

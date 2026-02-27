@@ -31,6 +31,9 @@ def workflow_node_to_camel(node: WorkflowNode) -> dict:
     return {
         "id": node.id,
         "nodeId": node.node_id,
+        "definitionType": node.definition_type,
+        "aiNodeId": node.ai_node_id,
+        "config": node.config,
         "name": node.name,
         "position": node.position,
         "configOverrides": node.config_overrides,
@@ -44,6 +47,8 @@ def workflow_connection_to_camel(conn: WorkflowConnection) -> dict:
         "id": conn.id,
         "sourceNodeId": conn.source_node_id,
         "targetNodeId": conn.target_node_id,
+        "sourceHandle": conn.source_handle,
+        "targetHandle": conn.target_handle,
         "condition": conn.condition,
     }
 
@@ -162,6 +167,9 @@ async def create_workflow(data: WorkflowCreate, db: AsyncSession = Depends(get_d
             id=node_data.id,
             workflow_id=workflow_id,
             node_id=node_data.nodeId,
+            definition_type=node_data.definitionType,
+            ai_node_id=node_data.aiNodeId,
+            config=node_data.config,
             name=node_data.name,
             position={"x": node_data.position.x, "y": node_data.position.y},
             config_overrides=node_data.configOverrides,
@@ -176,6 +184,8 @@ async def create_workflow(data: WorkflowCreate, db: AsyncSession = Depends(get_d
             workflow_id=workflow_id,
             source_node_id=conn_data.sourceNodeId,
             target_node_id=conn_data.targetNodeId,
+            source_handle=conn_data.sourceHandle,
+            target_handle=conn_data.targetHandle,
             condition=conn_data.condition.model_dump() if conn_data.condition else None,
         )
         db.add(conn)
@@ -220,6 +230,10 @@ async def update_workflow(
         workflow.tags = data.tags
     if data.viewport is not None:
         workflow.viewport = data.viewport.model_dump()
+    if data.trigger is not None:
+        workflow.trigger = data.trigger.model_dump()
+    if data.variables is not None:
+        workflow.variables = data.variables
 
     # 노드 업데이트 (전체 교체)
     if data.nodes is not None:
@@ -233,6 +247,9 @@ async def update_workflow(
                 id=node_data.id,
                 workflow_id=workflow_id,
                 node_id=node_data.nodeId,
+                definition_type=node_data.definitionType,
+                ai_node_id=node_data.aiNodeId,
+                config=node_data.config,
                 name=node_data.name,
                 position={"x": node_data.position.x, "y": node_data.position.y},
                 config_overrides=node_data.configOverrides,
@@ -253,6 +270,8 @@ async def update_workflow(
                 workflow_id=workflow_id,
                 source_node_id=conn_data.sourceNodeId,
                 target_node_id=conn_data.targetNodeId,
+                source_handle=conn_data.sourceHandle,
+                target_handle=conn_data.targetHandle,
                 condition=conn_data.condition.model_dump() if conn_data.condition else None,
             )
             db.add(conn)
@@ -312,7 +331,7 @@ async def execute_workflow_endpoint(
         id=f"exec-{uuid.uuid4().hex[:8]}",
         workflow_id=workflow_id,
         status=ExecutionStatus.PENDING,
-        input_data=request.input_data,
+        input_data=request.inputData,
     )
     db.add(execution)
     await db.commit()
@@ -374,6 +393,8 @@ async def stream_execution(execution_id: str, db: AsyncSession = Depends(get_db)
     async def event_generator() -> AsyncGenerator[str, None]:
         """SSE 이벤트 생성기"""
         while True:
+            # 세션 캐시 만료 → 백그라운드 태스크의 최신 커밋 반영
+            db.expire_all()
             # 실행 상태 조회
             result = await db.execute(
                 select(WorkflowExecution).where(WorkflowExecution.id == execution_id)

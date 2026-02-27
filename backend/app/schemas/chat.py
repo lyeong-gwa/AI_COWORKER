@@ -35,6 +35,18 @@ class ChatMessageRequest(BaseModel):
         default=None,
         description="세션 ID (없으면 새 세션 생성)"
     )
+    mode: Optional[Literal['general', 'taskboard', 'knowledge', 'tool', 'node', 'workflow']] = Field(
+        default=None,
+        description="채팅 모드 (페이지별 자동 설정)"
+    )
+    action: Optional[str] = Field(
+        default=None,
+        description="사용자가 선택한 액션 (create, search, ask, modify, explain)"
+    )
+    knowledgeFilter: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="지식 베이스 필터 상태 (category, tags, visibleDocIds)"
+    )
 
     class Config:
         json_schema_extra = {
@@ -44,7 +56,9 @@ class ChatMessageRequest(BaseModel):
                     "type": "task",
                     "id": "task-123"
                 },
-                "sessionId": "session-abc"
+                "sessionId": "session-abc",
+                "mode": "taskboard",
+                "action": "modify"
             }
         }
 

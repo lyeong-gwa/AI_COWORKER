@@ -1460,7 +1460,7 @@ function TaskDetailModal({
 export function TaskBoardPage() {
   const { toast } = useToast();
   const { setTaskContext, clearContext } = useChatAssistant();
-  const { onDataChange } = useChatContext();
+  const { onDataChange, setMode } = useChatContext();
   const [tasks, setTasks] = useState<TaskCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(false);
@@ -1476,6 +1476,11 @@ export function TaskBoardPage() {
   useEffect(() => {
     document.title = '태스크 보드 | AI 업무도우미';
   }, []);
+
+  useEffect(() => {
+    setMode('taskboard');
+    return () => setMode('general');
+  }, [setMode]);
 
   // ── Data loading ──────────────────────────────────────────────
 

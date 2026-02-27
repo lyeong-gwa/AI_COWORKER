@@ -33,11 +33,15 @@ class KnowledgeFileDoc:
     updated: str = ""
     content_hash: str = ""
     sync_status: str = "not_synced"  # synced | modified | not_synced
+    extra_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 def _knowledge_dir() -> str:
-    """지식 문서 디렉토리 경로"""
+    """지식 문서 디렉토리 경로 (backend/ 기준 해석)"""
+    from ..core.config import _BACKEND_DIR
     d = settings.KNOWLEDGE_DIR
+    if not os.path.isabs(d):
+        d = os.path.join(_BACKEND_DIR, d)
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -90,6 +94,7 @@ def build_md_file(
     tags: Optional[List[str]] = None,
     source: str = "",
     created: Optional[str] = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     """YAML frontmatter + 마크다운 본문 생성"""
     import yaml
@@ -103,6 +108,10 @@ def build_md_file(
         "source": source or "",
         "created": created or now,
     }
+
+    # 비표준 메타데이터 병합 (api 등)
+    if extra_metadata:
+        metadata.update(extra_metadata)
 
     yaml_str = yaml.dump(metadata, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
 
@@ -152,6 +161,10 @@ def list_md_files(chroma_hashes: Optional[Dict[str, str]] = None) -> List[Knowle
         if isinstance(tags_raw, str):
             tags_raw = [t.strip() for t in tags_raw.split(",") if t.strip()]
 
+        # 비표준 키 추출 (standard keys 제외)
+        _STANDARD_KEYS = {"title", "category", "tags", "source", "created"}
+        extra_meta = {k: v for k, v in metadata.items() if k not in _STANDARD_KEYS}
+
         docs.append(KnowledgeFileDoc(
             id=doc_id,
             title=metadata.get("title", doc_id),
@@ -163,6 +176,7 @@ def list_md_files(chroma_hashes: Optional[Dict[str, str]] = None) -> List[Knowle
             updated=str(file_updated),
             content_hash=content_hash,
             sync_status=sync_status,
+            extra_metadata=extra_meta,
         ))
 
     return docs
@@ -206,6 +220,10 @@ def read_md_file(doc_id: str, chroma_hashes: Optional[Dict[str, str]] = None) ->
     if isinstance(tags_raw, str):
         tags_raw = [t.strip() for t in tags_raw.split(",") if t.strip()]
 
+    # 비표준 키 추출 (standard keys 제외)
+    _STANDARD_KEYS = {"title", "category", "tags", "source", "created"}
+    extra_meta = {k: v for k, v in metadata.items() if k not in _STANDARD_KEYS}
+
     return KnowledgeFileDoc(
         id=doc_id,
         title=metadata.get("title", doc_id),
@@ -217,6 +235,7 @@ def read_md_file(doc_id: str, chroma_hashes: Optional[Dict[str, str]] = None) ->
         updated=str(file_updated),
         content_hash=content_hash,
         sync_status=sync_status,
+        extra_metadata=extra_meta,
     )
 
 
@@ -228,13 +247,14 @@ def write_md_file(
     tags: Optional[List[str]] = None,
     source: str = "",
     created: Optional[str] = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> KnowledgeFileDoc:
     """MD 파일 작성 (생성 또는 덮어쓰기)"""
     knowledge_dir = _knowledge_dir()
     safe_id = _sanitize_filename(doc_id)
     filepath = os.path.join(knowledge_dir, f"{safe_id}.md")
 
-    raw = build_md_file(title, content, category, tags, source, created)
+    raw = build_md_file(title, content, category, tags, source, created, extra_metadata)
 
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(raw)
@@ -253,6 +273,7 @@ def write_md_file(
         updated=now,
         content_hash=content_hash,
         sync_status="not_synced",
+        extra_metadata=extra_metadata or {},
     )
 
 

@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChatContext } from '../../contexts/ChatContext';
-import type { ChatContextType } from '../../types';
+import type { ChatContextType, ChatMode, ChatAction } from '../../types';
 import { StyledMarkdown } from './StyledMarkdown';
+import { ChatModeSelector } from '../chat/ChatModeSelector';
+import { ChatActionBar } from '../chat/ChatActionBar';
 
 function getContextIcon(contextType: ChatContextType['type']): string {
   switch (contextType) {
     case 'task': return '📋';
-    case 'tool': return '🔧';
     case 'node': return '🔷';
     case 'workflow': return '⚙️';
     case 'document': return '📚';
@@ -17,7 +18,6 @@ function getContextIcon(contextType: ChatContextType['type']): string {
 function getContextLabel(context: ChatContextType): string {
   switch (context.type) {
     case 'task': return `[태스크] ${context.data.title}`;
-    case 'tool': return `[도구] ${context.data.name}`;
     case 'node': return `[노드] ${context.data.name}`;
     case 'workflow': return `[워크플로우] ${context.data.name}`;
     case 'document': return `[문서] ${context.data.title}`;
@@ -25,8 +25,24 @@ function getContextLabel(context: ChatContextType): string {
   }
 }
 
+function getPlaceholder(mode: ChatMode, action: ChatAction | null): string {
+  if (mode === 'taskboard') {
+    if (action === 'create') return '이메일 내용이나 작업 내용을 붙여넣으세요...';
+    if (action === 'search') return '찾고 싶은 태스크를 설명하세요...';
+    return '태스크에 대해 물어보세요...';
+  }
+  if (mode === 'knowledge') return '지식 베이스에서 검색하거나 질문하세요...';
+  if (mode === 'node') return '노드 수정 사항을 설명하세요...';
+  if (mode === 'workflow') return '워크플로우 수정 사항을 설명하세요...';
+  return '메시지를 입력하세요...';
+}
+
 export function ChatAssistant() {
-  const { isOpen, messages, selectedContext, isLoading, isConnected, toggleChat, sendMessage, clearContext } = useChatContext();
+  const {
+    isOpen, messages, selectedContext, isLoading, isConnected,
+    activeMode, pendingAction,
+    toggleChat, sendMessage, clearContext, setMode, setAction,
+  } = useChatContext();
   const [inputValue, setInputValue] = useState('');
   const [isMinimized, setIsMinimized] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -108,6 +124,9 @@ export function ChatAssistant() {
 
       {!isMinimized && (
         <>
+          {/* Mode Selector */}
+          <ChatModeSelector activeMode={activeMode} onModeChange={setMode} />
+
           {/* Context Display */}
           {selectedContext.type !== 'none' && (
             <div className="bg-gray-750 border-b border-gray-700 p-3">
@@ -129,6 +148,9 @@ export function ChatAssistant() {
               </div>
             </div>
           )}
+
+          {/* Action Bar */}
+          <ChatActionBar mode={activeMode} activeAction={pendingAction} onActionSelect={setAction} />
 
           {/* Messages Area */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-850">
@@ -200,7 +222,7 @@ export function ChatAssistant() {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyPress}
-                placeholder="메시지를 입력하세요..."
+                placeholder={getPlaceholder(activeMode, pendingAction)}
                 disabled={isLoading}
                 className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed text-sm"
               />

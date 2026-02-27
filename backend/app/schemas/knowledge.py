@@ -2,7 +2,7 @@
 Knowledge Document Schemas (파일 기반 - camelCase)
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 
@@ -13,6 +13,7 @@ class KnowledgeCreate(BaseModel):
     source: Optional[str] = None
     category: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    api: Optional[Dict[str, Any]] = None
 
 
 class KnowledgeUpdate(BaseModel):
@@ -22,6 +23,7 @@ class KnowledgeUpdate(BaseModel):
     source: Optional[str] = None
     category: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    api: Optional[Dict[str, Any]] = None
 
 
 class KnowledgeSearchRequest(BaseModel):

@@ -4,6 +4,7 @@ Tool Executor Service
 각 도구 타입별 실행 로직
 """
 
+import json
 import time
 import re
 import httpx
@@ -38,7 +39,11 @@ def render_template(template: str, data: Dict[str, Any]) -> str:
                 value = value.get(k, '')
             else:
                 return ''
-        return str(value) if value is not None else ''
+        if value is None:
+            return ''
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
 
     return re.sub(r'\{\{([^}]+)\}\}', replacer, template)
 
@@ -115,11 +120,19 @@ async def _execute_api_call(
     # 인증 처리
     if auth_type == 'bearer':
         token = auth_config.get('token', '')
-        rendered_headers['Authorization'] = f"Bearer {render_template(token, input_data)}"
+        rendered_token = render_template(token, input_data)
+        if rendered_token:
+            rendered_headers['Authorization'] = f"Bearer {rendered_token}"
     elif auth_type == 'api_key':
         key_name = auth_config.get('headerName', 'X-API-Key')
         key_value = auth_config.get('apiKey', '')
         rendered_headers[key_name] = render_template(key_value, input_data)
+
+    # 빈 값 헤더 제거 (Bearer 뒤 토큰 없는 경우 등)
+    rendered_headers = {
+        k: v for k, v in rendered_headers.items()
+        if v and v.strip() and v.strip() != "Bearer"
+    }
 
     # 바디 렌더링
     body = None

@@ -105,133 +105,22 @@ export interface JsonSchema {
   required?: string[];
 }
 
-// --- 도구 정의 ---
-export type ToolType = 'api_call' | 'file_read' | 'file_write' | 'code_execute' | 'database_query';
+// --- API 문서 메타데이터 (api-call 노드용) ---
 
-export interface ApiCallTool {
-  type: 'api_call';
-  id: string;
-  name: string;
-  description: string;
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  urlTemplate: string;              // {{input.baseUrl}}/api/tickets 형식
-  headers?: Record<string, string>;
-  bodyTemplate?: string;            // JSON 템플릿
-  responseMapping?: string;         // 응답에서 추출할 경로 (예: "data.items")
-}
-
-export interface FileReadTool {
-  type: 'file_read';
-  id: string;
-  name: string;
-  description: string;
-  pathTemplate: string;
-  encoding?: string;
-}
-
-export interface FileWriteTool {
-  type: 'file_write';
-  id: string;
-  name: string;
-  description: string;
-  pathTemplate: string;
-  contentTemplate: string;
-}
-
-export interface CodeExecuteTool {
-  type: 'code_execute';
-  id: string;
-  name: string;
-  description: string;
-  language: 'javascript' | 'python';
-  code: string;
-}
-
-export interface DatabaseQueryTool {
-  type: 'database_query';
-  id: string;
-  name: string;
-  description: string;
-  queryTemplate: string;
-}
-
-export type NodeTool = ApiCallTool | FileReadTool | FileWriteTool | CodeExecuteTool | DatabaseQueryTool;
-
-// ─── Tool Library (중앙 관리용 도구 정의) ────────────────────────────────────
-
-/** 타입별 설정 객체 (라이브러리 저장용 – id/name/description 중복 없이 config만) */
-export interface ApiCallConfig {
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  urlTemplate: string;
+/** API 메타데이터 */
+export interface ApiDocMeta {
+  method: string;
+  url: string;
   headers?: Record<string, string>;
   bodyTemplate?: string;
-  responseMapping?: string;
-  auth?: { type: 'bearer' | 'basic' | 'api_key'; value: string };
 }
 
-export interface FileReadConfig {
-  pathTemplate: string;
-  encoding?: string;
-  parser: 'text' | 'json' | 'csv';
-}
-
-export interface FileWriteConfig {
-  pathTemplate: string;
-  contentTemplate: string;
-}
-
-export interface CodeExecuteConfig {
-  language: 'javascript' | 'python';
-  code: string;
-}
-
-export interface DatabaseQueryConfig {
-  connectionId?: string;
-  queryTemplate: string;
-}
-
-export type ToolConfig =
-  | ApiCallConfig
-  | FileReadConfig
-  | FileWriteConfig
-  | CodeExecuteConfig
-  | DatabaseQueryConfig;
-
-/** 라이브러리에 저장되는 재사용 가능한 도구 정의 */
-export interface ToolDefinition {
+/** API 문서 요약 (드롭다운 목록용) */
+export interface ApiDocSummary {
   id: string;
-  name: string;
-  description: string;
-  type: ToolType;
-  icon: string;
-  color: string;                // Tailwind bg-* class
+  title: string;
+  api?: ApiDocMeta;
   tags: string[];
-  config: ToolConfig;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** 노드 내부에서 도구를 참조하는 방식 */
-export interface NodeToolReference {
-  mode: 'library' | 'embedded';
-  toolId?: string;              // mode === 'library'일 때 ToolDefinition.id
-  embeddedTool?: NodeTool;      // mode === 'embedded'일 때 인라인 도구
-}
-
-// --- 지식 베이스 필터 ---
-export interface KnowledgeFilterCondition {
-  field: 'tag' | 'metadata';
-  key?: string;                   // metadata 필드명
-  operator: 'equals' | 'contains' | 'in' | 'not_in';
-  value: string | string[];
-}
-
-export interface KnowledgeConfig {
-  enabled: boolean;
-  filters: KnowledgeFilterCondition[];
-  maxChunks: number;              // 최대 청크 수
-  includeInPrompt: boolean;       // 프롬프트에 자동 포함 여부
-  promptTemplate?: string;        // 지식 삽입 템플릿 (예: "관련 지식:\n{{knowledge}}")
 }
 
 // --- AI 노드 (재사용 가능한 LLM 노드) ---
@@ -246,14 +135,6 @@ export interface AINode {
   // Input/Output 스키마 (JSON 강제)
   inputSchema: JsonSchema;
   outputSchema: JsonSchema;
-
-  // 도구 설정 (라이브러리 참조 방식 - 읽기 전용)
-  linkedToolIds: string[];          // ToolDefinition.id 참조 목록
-  tools: NodeTool[];                // deprecated - 하위 호환용
-  toolRefs?: NodeToolReference[];   // deprecated
-
-  // 지식 베이스 설정
-  knowledge: KnowledgeConfig;
 
   // LLM 프롬프트 설정
   systemPrompt: string;           // 시스템 프롬프트
@@ -277,9 +158,6 @@ export interface AINode {
     maxRetries: number;             // 최대 재시도 횟수
   };
 
-  // 후처리 설정
-  outputMapping?: string;         // LLM 응답에서 output 매핑 코드/표현식
-
   createdAt: string;
   updatedAt: string;
 }
@@ -297,8 +175,13 @@ export interface Position {
 export interface WorkflowNodeInstance {
   id: string;                     // 인스턴스 ID
   nodeId: string;                 // AINode.id 참조
+  definitionType?: string;        // "ai-custom" | "manual" | "schedule" | "form"
+  aiNodeId?: string;              // AINode reference ID
   name: string;                   // 인스턴스 이름 (기본값: AINode.name)
   position: Position;
+
+  // 노드별 설정 (JSON) — 분류기 규칙 등
+  config?: Record<string, unknown>;
 
   // 노드별 설정 오버라이드 (선택적)
   configOverrides?: {
@@ -315,6 +198,8 @@ export interface WorkflowConnection {
   id: string;
   sourceNodeId: string;           // WorkflowNodeInstance.id
   targetNodeId: string;           // WorkflowNodeInstance.id
+  sourceHandle?: string;
+  targetHandle?: string;
   // 조건부 연결 (선택적)
   condition?: {
     field: string;                // 소스 출력 필드
@@ -340,7 +225,7 @@ export interface Workflow {
 
   // 트리거 설정
   trigger: {
-    type: 'manual' | 'schedule' | 'webhook' | 'event';
+    type: 'manual' | 'schedule' | 'webhook' | 'event' | 'form';
     config: Record<string, unknown>;
   };
 
@@ -348,6 +233,51 @@ export interface Workflow {
   tags: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+// Factory Map (Factorio-style singleton)
+export type FactoryMap = Workflow;  // 내부 구조 동일, 항상 1개
+
+export interface WarehouseEntry {
+  id: string;
+  nodeInstanceId: string;
+  executionId?: string;
+  data: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface WarehouseListResponse {
+  items: WarehouseEntry[];
+  total: number;
+  nodeInstanceId: string;
+}
+
+export interface QueueItem {
+  id: string;
+  nodeInstanceId: string;
+  executionId?: string;
+  data: Record<string, unknown>;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  result?: Record<string, unknown>;
+  error?: string;
+  createdAt: string;
+  processedAt?: string;
+}
+
+export interface QueueListResponse {
+  items: QueueItem[];
+  total: number;
+  pending: number;
+  processing: number;
+  nodeInstanceId: string;
+}
+
+export interface SorterRule {
+  id: string;
+  field: string;
+  operator: 'equals' | 'notEquals' | 'contains' | 'startsWith' | 'endsWith' | 'greaterThan' | 'lessThan' | 'exists' | 'notExists' | 'regex';
+  value: string;
+  label: string;
 }
 
 // ============================================
@@ -368,17 +298,6 @@ export interface NodeExecutionResult {
   status: ExecutionStatus;
   input?: unknown;
   output?: unknown;
-  toolResults?: Array<{
-    toolId: string;
-    toolName: string;
-    result: unknown;
-    error?: string;
-  }>;
-  knowledgeUsed?: Array<{
-    documentId: string;
-    title: string;
-    relevanceScore: number;
-  }>;
   llmResponse?: {
     rawResponse: string;
     parsedOutput: unknown;
@@ -453,9 +372,7 @@ export type FieldType =
   | 'condition'
   | 'keyvalue'
   | 'expression'
-  | 'json-schema'
-  | 'tool-list'
-  | 'knowledge-filter';
+  | 'json-schema';
 
 export interface FieldOption {
   label: string;
@@ -541,7 +458,6 @@ export interface WorkflowNode {
 export type ChatContextType =
   | { type: 'none' }
   | { type: 'task'; data: TaskCard }
-  | { type: 'tool'; data: ToolDefinition }
   | { type: 'node'; data: AINode }
   | { type: 'workflow'; data: Workflow }
   | { type: 'document'; data: KnowledgeDocument };
@@ -553,3 +469,76 @@ export interface ChatMessage {
   context?: ChatContextType;
   timestamp: string;
 }
+
+// ============================================
+// Chat Mode Types (구조화된 질문 시스템)
+// ============================================
+
+export type ChatMode = 'general' | 'taskboard' | 'knowledge' | 'node' | 'workflow';
+export type ChatAction = 'create' | 'search' | 'ask' | 'modify' | 'explain';
+
+export interface KnowledgeFilterState {
+  category?: string;
+  tags?: string[];
+  visibleDocIds?: string[];
+}
+
+// ─── API Definition ───────────────────────────────────────────────────────────
+
+export interface ApiParam {
+  name: string;
+  in: 'path' | 'query' | 'header' | 'body';
+  type: string;
+  required: boolean;
+  description: string;
+  default?: string;
+}
+
+export interface ResponseField {
+  field: string;
+  type: string;
+  description: string;
+}
+
+export interface ApiDefinition {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+  category: string;
+  tags: string[];
+  method: string;
+  urlTemplate: string;
+  headers: Record<string, string>;
+  bodyTemplate: string | null;
+  authType: 'none' | 'bearer' | 'basic' | 'api_key';
+  authConfig: Record<string, any>;
+  parameters: ApiParam[];
+  responseSchema: {
+    fields: ResponseField[];
+    example?: any;
+  };
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateApiDefinitionData {
+  name: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  category?: string;
+  tags?: string[];
+  method: string;
+  urlTemplate: string;
+  headers?: Record<string, string>;
+  bodyTemplate?: string;
+  authType?: string;
+  authConfig?: Record<string, any>;
+  parameters?: ApiParam[];
+  responseSchema?: { fields: ResponseField[]; example?: any };
+}
+
+export type UpdateApiDefinitionData = Partial<CreateApiDefinitionData> & { isActive?: boolean };

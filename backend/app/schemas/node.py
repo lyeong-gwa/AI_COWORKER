@@ -24,13 +24,6 @@ class LLMConfig(BaseModel):
     maxTokens: int = Field(default=2000, ge=100, le=100000)
 
 
-class KnowledgeConfig(BaseModel):
-    """지식 베이스 설정"""
-    linkedIds: List[str] = Field(default_factory=list)
-    filters: Dict[str, Any] = Field(default_factory=dict)
-    maxTokens: int = 2000
-
-
 class NodeBase(BaseModel):
     """노드 기본 스키마"""
     name: str = Field(..., min_length=1, max_length=100)
@@ -39,9 +32,6 @@ class NodeBase(BaseModel):
     icon: str = Field(default="🤖", max_length=10)
     color: str = Field(default="text-blue-400", max_length=50)
     tags: List[str] = Field(default_factory=list)
-
-    linkedToolIds: List[str] = Field(default_factory=list)
-    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
 
     systemPrompt: str = Field(default="")
     userPromptTemplate: str = Field(default="")
@@ -73,9 +63,6 @@ class NodeUpdate(BaseModel):
     color: Optional[str] = Field(None, max_length=50)
     tags: Optional[List[str]] = None
 
-    linkedToolIds: Optional[List[str]] = None
-    knowledge: Optional[KnowledgeConfig] = None
-
     systemPrompt: Optional[str] = None
     userPromptTemplate: Optional[str] = None
 
@@ -97,9 +84,6 @@ class NodeResponse(BaseModel):
     icon: str
     color: str
     tags: List[str]
-
-    linkedToolIds: List[str] = Field(serialization_alias="linkedToolIds")
-    knowledge: Dict[str, Any]
 
     systemPrompt: str = Field(serialization_alias="systemPrompt")
     userPromptTemplate: str = Field(serialization_alias="userPromptTemplate")
@@ -129,8 +113,6 @@ class NodeResponse(BaseModel):
             icon=obj.icon,
             color=obj.color,
             tags=obj.tags,
-            linkedToolIds=obj.linked_tool_ids,
-            knowledge=obj.knowledge,
             systemPrompt=obj.system_prompt,
             userPromptTemplate=obj.user_prompt_template,
             inputSchema=obj.input_schema,
@@ -146,8 +128,6 @@ class NodeResponse(BaseModel):
 class NodeTestRequest(BaseModel):
     """노드 테스트 요청"""
     inputData: Dict[str, Any] = Field(default_factory=dict)
-    mockToolResults: Optional[Dict[str, Any]] = None
-    mockKnowledge: Optional[str] = None
 
 
 class NodeTestResponse(BaseModel):
@@ -162,7 +142,6 @@ class NodeTestResponse(BaseModel):
 
     # 중간 결과
     renderedPrompt: Optional[str] = None
-    toolResults: Optional[Dict[str, Any]] = None
     llmResponse: Optional[str] = None
 
     # 검증 결과

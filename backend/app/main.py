@@ -20,13 +20,18 @@ async def lifespan(app: FastAPI):
     # 시작 시
     print(f"[START] {settings.APP_NAME} v{settings.APP_VERSION} 시작")
 
-    # 데이터 디렉토리 생성
-    os.makedirs("./data", exist_ok=True)
-    os.makedirs("./data/knowledge", exist_ok=True)
+    # 데이터 디렉토리 생성 (backend/ 기준)
+    from .core.config import _BACKEND_DIR
+    os.makedirs(os.path.join(_BACKEND_DIR, "data"), exist_ok=True)
+    os.makedirs(os.path.join(_BACKEND_DIR, "data", "knowledge"), exist_ok=True)
 
     # 데이터베이스 초기화
     await init_db()
     print("[OK] 데이터베이스 초기화 완료")
+
+    # 시드 데이터 생성
+    from .seed import seed_database
+    await seed_database()
 
     yield
 

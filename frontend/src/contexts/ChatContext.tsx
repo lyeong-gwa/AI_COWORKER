@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import type { ChatMessage, ChatContextType } from '../types';
+import type { ChatMessage, ChatContextType, ChatMode, ChatAction, KnowledgeFilterState } from '../types';
 import { chatApi } from '../services/api';
 
 interface ChatContextState {
@@ -10,6 +10,9 @@ interface ChatContextState {
   isLoading: boolean;
   sessionId: string | null;
   isConnected: boolean;
+  activeMode: ChatMode;
+  pendingAction: ChatAction | null;
+  knowledgeFilter: KnowledgeFilterState | null;
 }
 
 interface ChatContextValue extends ChatContextState {
@@ -19,6 +22,9 @@ interface ChatContextValue extends ChatContextState {
   setContext: (context: ChatContextType) => void;
   clearContext: () => void;
   onDataChange: (callback: (target: string) => void) => () => void;
+  setMode: (mode: ChatMode) => void;
+  setAction: (action: ChatAction | null) => void;
+  setKnowledgeFilter: (filter: KnowledgeFilterState | null) => void;
 }
 
 const ChatContext = createContext<ChatContextValue | undefined>(undefined);
@@ -37,6 +43,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [activeMode, setActiveMode] = useState<ChatMode>('general');
+  const [pendingAction, setPendingAction] = useState<ChatAction | null>(null);
+  const [knowledgeFilter, setKnowledgeFilterState] = useState<KnowledgeFilterState | null>(null);
   const retryCountRef = useRef(0);
   const dataChangeListenersRef = useRef<Set<(target: string) => void>>(new Set());
 
@@ -69,6 +78,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const setMode = useCallback((mode: ChatMode) => {
+    setActiveMode(mode);
+    setPendingAction(null); // 모드 변경 시 액션 초기화
+  }, []);
+
+  const setAction = useCallback((action: ChatAction | null) => {
+    setPendingAction(action);
+  }, []);
+
+  const setKnowledgeFilter = useCallback((filter: KnowledgeFilterState | null) => {
+    setKnowledgeFilterState(filter);
+  }, []);
+
   const sendMessage = useCallback(async (content: string) => {
     // Add user message
     const userMessage: ChatMessage = {
@@ -89,11 +111,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         id: selectedContext.data?.id,
       } : undefined;
 
-      // Call backend API
+      // Call backend API with mode, action, knowledgeFilter
       const response = await chatApi.sendMessage({
         content,
         context: contextForApi,
         sessionId: sessionId || undefined,
+        mode: activeMode !== 'general' ? activeMode : undefined,
+        action: pendingAction || undefined,
+        knowledgeFilter: knowledgeFilter || undefined,
       });
 
       // Update session ID
@@ -112,6 +137,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setMessages(prev => [...prev, assistantMessage]);
       setIsConnected(true);
       retryCountRef.current = 0;
+
+      // 전송 후 pendingAction 초기화
+      setPendingAction(null);
 
       // If action was performed, trigger data refresh
       if (response.action) {
@@ -139,9 +167,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           case 'task':
             fallbackContent = `[오프라인] 선택된 태스크: "${selectedContext.data.title}"\n서버 연결 후 작업이 가능합니다.`;
             break;
-          case 'tool':
-            fallbackContent = `[오프라인] 선택된 도구: "${selectedContext.data.name}"\n서버 연결 후 활용이 가능합니다.`;
-            break;
           case 'node':
             fallbackContent = `[오프라인] 선택된 노드: "${selectedContext.data.name}"\n서버 연결 후 작업이 가능합니다.`;
             break;
@@ -165,10 +190,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedContext, sessionId]);
+  }, [selectedContext, sessionId, activeMode, pendingAction, knowledgeFilter]);
 
   const setContext = useCallback((context: ChatContextType) => {
     setSelectedContext(context);
+    // 컨텍스트 타입에 따라 자동 모드 설정
+    switch (context.type) {
+      case 'task':
+        setActiveMode('taskboard');
+        break;
+      case 'node':
+        setActiveMode('node');
+        break;
+      case 'workflow':
+        setActiveMode('workflow');
+        break;
+      case 'document':
+        setActiveMode('knowledge');
+        break;
+      default:
+        // 'none'인 경우 모드를 변경하지 않음
+        break;
+    }
   }, []);
 
   const clearContext = useCallback(() => {
@@ -182,14 +225,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     isLoading,
     sessionId,
     isConnected,
+    activeMode,
+    pendingAction,
+    knowledgeFilter,
     toggleChat,
     openChat,
     sendMessage,
     setContext,
     clearContext,
     onDataChange,
+    setMode,
+    setAction,
+    setKnowledgeFilter,
   }), [isOpen, messages, selectedContext, isLoading, sessionId, isConnected,
-       toggleChat, openChat, sendMessage, setContext, clearContext, onDataChange]);
+       activeMode, pendingAction, knowledgeFilter,
+       toggleChat, openChat, sendMessage, setContext, clearContext, onDataChange,
+       setMode, setAction, setKnowledgeFilter]);
 
   return (
     <ChatContext.Provider value={contextValue}>

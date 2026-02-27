@@ -23,7 +23,7 @@ router = APIRouter()
 
 def _doc_to_response(doc: KnowledgeFileDoc) -> dict:
     """KnowledgeFileDoc -> camelCase dict 응답"""
-    return {
+    resp = {
         "id": doc.id,
         "title": doc.title,
         "content": doc.content,
@@ -35,6 +35,10 @@ def _doc_to_response(doc: KnowledgeFileDoc) -> dict:
         "createdAt": doc.created,
         "updatedAt": doc.updated,
     }
+    # 도구-API 문서의 경우 api 메타데이터 포함
+    if hasattr(doc, 'extra_metadata') and doc.extra_metadata.get('api'):
+        resp["api"] = doc.extra_metadata["api"]
+    return resp
 
 
 def _get_chroma_hashes() -> dict:
@@ -87,6 +91,15 @@ async def list_documents(
     return [_doc_to_response(d) for d in docs]
 
 
+@router.get("/meta")
+async def get_metadata():
+    """지식 문서의 고유 카테고리/태그 목록 반환"""
+    docs = list_md_files()
+    categories = sorted({d.category for d in docs if d.category})
+    tags = sorted({t for d in docs for t in d.tags if t})
+    return {"categories": categories, "tags": tags}
+
+
 @router.get("/{doc_id}")
 async def get_document(doc_id: str):
     """문서 상세 조회"""
@@ -104,6 +117,10 @@ async def create_document(data: KnowledgeCreate):
     """문서 생성 (MD 파일 작성)"""
     doc_id = generate_doc_id(data.title)
 
+    extra_metadata = {}
+    if data.api:
+        extra_metadata["api"] = data.api
+
     doc = write_md_file(
         doc_id=doc_id,
         title=data.title,
@@ -111,6 +128,7 @@ async def create_document(data: KnowledgeCreate):
         category=data.category or "",
         tags=data.tags,
         source=data.source or "",
+        extra_metadata=extra_metadata if extra_metadata else None,
     )
 
     return _doc_to_response(doc)
@@ -123,6 +141,14 @@ async def update_document(doc_id: str, data: KnowledgeUpdate):
     if not existing:
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다")
 
+    # Merge extra_metadata: update api if provided, otherwise keep existing
+    extra_metadata = dict(existing.extra_metadata) if existing.extra_metadata else {}
+    if data.api is not None:
+        if data.api:
+            extra_metadata["api"] = data.api
+        else:
+            extra_metadata.pop("api", None)
+
     doc = write_md_file(
         doc_id=doc_id,
         title=data.title,
@@ -131,6 +157,7 @@ async def update_document(doc_id: str, data: KnowledgeUpdate):
         tags=data.tags,
         source=data.source or "",
         created=existing.created,
+        extra_metadata=extra_metadata if extra_metadata else None,
     )
 
     return _doc_to_response(doc)

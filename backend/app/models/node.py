@@ -1,5 +1,5 @@
 """
-AI Node Model - AI 노드 (ATOMIC 패턴의 Molecule)
+AI Node Model - AI 노드 (순수 LLM 노드)
 
 프론트엔드 타입 정의에 맞춤
 """
@@ -13,7 +13,7 @@ from ..core.database import Base
 
 
 class AINode(Base):
-    """AI 노드 모델 (도구 + 프롬프트 + 스키마의 조합)"""
+    """AI 노드 모델 (프롬프트 + 스키마 + LLM)"""
     __tablename__ = "ai_nodes"
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
@@ -23,17 +23,6 @@ class AINode(Base):
     icon: Mapped[str] = mapped_column(String(10), default="🤖", nullable=False)
     color: Mapped[str] = mapped_column(String(50), default="text-blue-400", nullable=False)
     tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
-
-    # 연결된 도구 ID 목록 (라이브러리 참조)
-    linked_tool_ids: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
-
-    # 지식 베이스 설정
-    # { linkedIds: string[], filters?: { ... }, maxTokens?: number }
-    knowledge: Mapped[Dict[str, Any]] = mapped_column(
-        JSON,
-        default=lambda: {"linkedIds": [], "filters": {}, "maxTokens": 2000},
-        nullable=False,
-    )
 
     # 프롬프트 (분리: systemPrompt + userPromptTemplate)
     system_prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)

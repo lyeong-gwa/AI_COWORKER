@@ -11,13 +11,12 @@ from .knowledge import (
     KnowledgeSearchRequest,
 )
 from .tool import (
-    ToolCreate, ToolUpdate, ToolResponse,
-    ToolTestRequest, ToolTestResponse,
+    ApiDocExecuteRequest, ToolTestResponse,
 )
 from .node import (
     NodeCreate, NodeUpdate, NodeResponse,
     NodeTestRequest, NodeTestResponse,
-    OutputEnforcementConfig, LLMConfig, KnowledgeConfig,
+    OutputEnforcementConfig, LLMConfig,
 )
 from .workflow import (
     WorkflowCreate, WorkflowUpdate, WorkflowResponse, WorkflowSummaryResponse,
@@ -27,6 +26,14 @@ from .workflow import (
     TriggerConfig, ViewportConfig, Position,
 )
 from .common import PaginatedResponse, ErrorResponse
+from .api_definition import (
+    ApiParamSchema,
+    ResponseFieldSchema,
+    ApiDefinitionCreate,
+    ApiDefinitionUpdate,
+    ApiTestRequest,
+    ApiCaptureRequest,
+)
 
 __all__ = [
     # Task
@@ -35,13 +42,12 @@ __all__ = [
     # Knowledge
     'KnowledgeCreate', 'KnowledgeUpdate',
     'KnowledgeSearchRequest',
-    # Tool
-    'ToolCreate', 'ToolUpdate', 'ToolResponse',
-    'ToolTestRequest', 'ToolTestResponse',
+    # Tool (API doc execution)
+    'ApiDocExecuteRequest', 'ToolTestResponse',
     # Node
     'NodeCreate', 'NodeUpdate', 'NodeResponse',
     'NodeTestRequest', 'NodeTestResponse',
-    'OutputEnforcementConfig', 'LLMConfig', 'KnowledgeConfig',
+    'OutputEnforcementConfig', 'LLMConfig',
     # Workflow
     'WorkflowCreate', 'WorkflowUpdate', 'WorkflowResponse', 'WorkflowSummaryResponse',
     'WorkflowNodeCreate', 'WorkflowNodeResponse',
@@ -50,4 +56,8 @@ __all__ = [
     'TriggerConfig', 'ViewportConfig', 'Position',
     # Common
     'PaginatedResponse', 'ErrorResponse',
+    # ApiDefinition
+    'ApiParamSchema', 'ResponseFieldSchema',
+    'ApiDefinitionCreate', 'ApiDefinitionUpdate',
+    'ApiTestRequest', 'ApiCaptureRequest',
 ]

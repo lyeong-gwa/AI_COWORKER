@@ -46,6 +46,9 @@ async def send_message(
             content=request.content,
             context=request.context,
             session_id=request.sessionId,
+            mode=request.mode,
+            action=request.action,
+            knowledge_filter=request.knowledgeFilter,
         )
         return response
 

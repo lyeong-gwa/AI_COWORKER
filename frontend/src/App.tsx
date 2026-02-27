@@ -6,9 +6,9 @@ import { Layout } from './components/common/Layout';
 
 const TaskBoardPage = lazy(() => import('./pages/TaskBoardPage').then(m => ({ default: m.TaskBoardPage })));
 const KnowledgeBasePage = lazy(() => import('./pages/KnowledgeBasePage').then(m => ({ default: m.KnowledgeBasePage })));
-const ToolManagementPage = lazy(() => import('./pages/ToolManagementPage').then(m => ({ default: m.ToolManagementPage })));
+const ApiDefinitionPage = lazy(() => import('./pages/ApiDefinitionPage'));
 const NodeManagementPage = lazy(() => import('./pages/NodeManagementPage').then(m => ({ default: m.NodeManagementPage })));
-const WorkflowPage = lazy(() => import('./pages/WorkflowPage').then(m => ({ default: m.WorkflowPage })));
+const FactoryPage = lazy(() => import('./pages/FactoryPage').then(m => ({ default: m.FactoryPage })));
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
 
 function PageLoader() {
@@ -32,9 +32,13 @@ function App() {
               <Route path="/" element={<Layout />}>
                 <Route index element={<TaskBoardPage />} />
                 <Route path="knowledge" element={<KnowledgeBasePage />} />
-                <Route path="tools" element={<ToolManagementPage />} />
+                <Route path="api-definitions" element={
+                  <Suspense fallback={<PageLoader />}>
+                    <ApiDefinitionPage />
+                  </Suspense>
+                } />
                 <Route path="nodes" element={<NodeManagementPage />} />
-                <Route path="workflow" element={<WorkflowPage />} />
+                <Route path="factory" element={<FactoryPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Route>
             </Routes>
