@@ -614,6 +614,12 @@ export const exportImportApi = {
     request('/export/workflows'),
   importWorkflows: (data: any[]): Promise<ImportResult> =>
     request('/import/workflows', { method: 'POST', body: JSON.stringify(data) }),
+
+  // 로컬 파일 기반 가져오기 (DLP 우회)
+  listLocalFiles: (): Promise<{ name: string; size: number; modifiedAt: number }[]> =>
+    request('/local-files'),
+  importLocalFile: (filename: string): Promise<ImportResult & { type: string }> =>
+    request(`/import/local/${encodeURIComponent(filename)}`, { method: 'POST' }),
 };
 
 // Export error class

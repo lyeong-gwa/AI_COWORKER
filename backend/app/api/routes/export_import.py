@@ -8,6 +8,9 @@ Per-entity export and import endpoints for:
 - Workflows (with bundled dependencies)
 """
 
+import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -680,3 +683,91 @@ async def import_workflows(
         "updated": total_updated,
         "skipped": total_skipped,
     }
+
+
+# ── Local file import (DLP 우회) ───────────────────────────────────────────
+
+_DOWNLOAD_DIR = Path(__file__).resolve().parents[3] / "data" / "download"
+
+
+@router.get("/local-files")
+async def list_local_files():
+    """backend/data/download/ 디렉토리의 JSON 파일 목록 반환"""
+    if not _DOWNLOAD_DIR.exists():
+        _DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        return []
+
+    files = []
+    for f in sorted(_DOWNLOAD_DIR.iterdir()):
+        if f.suffix.lower() == ".json" and f.is_file():
+            files.append({
+                "name": f.name,
+                "size": f.stat().st_size,
+                "modifiedAt": f.stat().st_mtime,
+            })
+    return files
+
+
+@router.post("/import/local/{filename}")
+async def import_local_file(
+    filename: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """backend/data/download/{filename}.json 파일을 읽어서 타입에 맞게 가져오기"""
+    # 경로 순회 방지
+    safe_name = Path(filename).name
+    filepath = _DOWNLOAD_DIR / safe_name
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(status_code=404, detail=f"파일을 찾을 수 없습니다: {safe_name}")
+
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="잘못된 JSON 파일입니다")
+
+    # 파일명으로 타입 자동 판별
+    name_lower = safe_name.lower()
+
+    if "workflow" in name_lower:
+        items = data if isinstance(data, list) else [data]
+        result = await import_workflows(items, db)
+        return {"type": "workflows", **result}
+
+    elif "node" in name_lower:
+        items = data if isinstance(data, list) else [data]
+        result = await import_nodes(items, db)
+        return {"type": "nodes", **result}
+
+    elif "api" in name_lower:
+        items = data if isinstance(data, list) else [data]
+        result = await import_api_definitions(items, db)
+        return {"type": "api-definitions", **result}
+
+    elif "knowledge" in name_lower:
+        items = data if isinstance(data, list) else [data]
+        result = await import_knowledge(items)
+        return {"type": "knowledge", **result}
+
+    else:
+        # 타입 판별 불가 — 구조로 추론
+        if isinstance(data, list) and len(data) > 0:
+            sample = data[0]
+            if isinstance(sample, dict):
+                if "workflow" in sample and "dependencies" in sample:
+                    result = await import_workflows(data, db)
+                    return {"type": "workflows", **result}
+                elif "systemPrompt" in sample:
+                    result = await import_nodes(data, db)
+                    return {"type": "nodes", **result}
+                elif "urlTemplate" in sample or "method" in sample:
+                    result = await import_api_definitions(data, db)
+                    return {"type": "api-definitions", **result}
+                elif "content" in sample and "title" in sample:
+                    result = await import_knowledge(data)
+                    return {"type": "knowledge", **result}
+
+        raise HTTPException(
+            status_code=400,
+            detail="파일 타입을 판별할 수 없습니다. 파일명에 workflow, node, api, knowledge 중 하나를 포함시켜주세요.",
+        )
