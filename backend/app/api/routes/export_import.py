@@ -28,6 +28,7 @@ from ...services.knowledge_file_service import (
     read_md_file,
     write_md_file,
     generate_doc_id,
+    compute_hash,
     KnowledgeFileDoc,
 )
 
@@ -373,7 +374,7 @@ async def export_knowledge():
 
 @router.post("/import/knowledge")
 async def import_knowledge(items: List[Dict[str, Any]] = Body(...)):
-    """지식 문서 가져오기 (write_md_file upsert)"""
+    """지식 문서 가져오기 (write_md_file upsert + 벡터 DB 자동 동기화)"""
     created = updated = skipped = 0
 
     for item in items:
@@ -407,7 +408,33 @@ async def import_knowledge(items: List[Dict[str, Any]] = Body(...)):
             logger.warning(f"지식 문서 가져오기 실패 id={doc_id}: {e}")
             skipped += 1
 
-    return {"created": created, "updated": updated, "skipped": skipped}
+    # 가져오기 후 벡터 DB 자동 전체 동기화
+    synced = 0
+    try:
+        from ...services.embedding import get_vector_db
+        vector_db = get_vector_db()
+        all_docs = list_md_files()
+        for doc in all_docs:
+            try:
+                content_hash = compute_hash(doc.content)
+                vector_db.add_document(
+                    doc_id=doc.id,
+                    content=doc.content,
+                    metadata={
+                        "title": doc.title,
+                        "category": doc.category or "",
+                        "source": doc.source or "",
+                        "content_hash": content_hash,
+                    },
+                )
+                synced += 1
+            except Exception:
+                pass
+        logger.info(f"지식 가져오기 후 벡터 DB 동기화 완료: {synced}/{len(all_docs)}")
+    except Exception as e:
+        logger.warning(f"벡터 DB 자동 동기화 실패 (수동 동기화 필요): {e}")
+
+    return {"created": created, "updated": updated, "skipped": skipped, "synced": synced}
 
 
 # ── Export: Single Workflow ──────────────────────────────────────────────────
@@ -463,19 +490,11 @@ async def import_workflows(
 ):
     """
     워크플로우 번들 가져오기.
-
-    각 번들 형식:
-    {
-      "workflow": { ...workflow data },
-      "dependencies": {
-        "aiNodes": [...],
-        "apiDefinitions": [...],
-        "knowledgeDocs": [...]
-      }
-    }
-
-    순서: 의존성 먼저 upsert -> 워크플로우 upsert
+    의존성을 개별 세션으로 처리하여 하나의 실패가 전체를 막지 않도록 함.
     """
+    from ...core.database import async_session_maker
+    from ...models.workflow import WorkflowStatus
+
     total_created = total_updated = total_skipped = 0
 
     for bundle in bundles:
@@ -485,93 +504,97 @@ async def import_workflows(
             total_skipped += 1
             continue
 
-        # 1. AI 노드 upsert
+        # 1. AI 노드 upsert (개별 세션 — linked_tool_ids 등 레거시 컬럼 에러 방어)
         for node_item in deps.get("aiNodes", []):
             node_id = node_item.get("id")
             if not node_id:
                 continue
-            existing = await db.get(AINode, node_id)
             try:
-                if existing:
-                    existing.name = node_item.get("name", existing.name)
-                    existing.description = node_item.get("description", existing.description)
-                    existing.category = node_item.get("category", existing.category)
-                    existing.icon = node_item.get("icon", existing.icon)
-                    existing.color = node_item.get("color", existing.color)
-                    existing.tags = node_item.get("tags", existing.tags)
-                    existing.system_prompt = node_item.get("systemPrompt", existing.system_prompt)
-                    existing.user_prompt_template = node_item.get("userPromptTemplate", existing.user_prompt_template)
-                    existing.input_schema = node_item.get("inputSchema", existing.input_schema)
-                    existing.output_schema = node_item.get("outputSchema", existing.output_schema)
-                    existing.output_enforcement = node_item.get("outputEnforcement", existing.output_enforcement)
-                    existing.llm_config = node_item.get("llmConfig", existing.llm_config)
-                    existing.is_active = node_item.get("isActive", existing.is_active)
-                else:
-                    db.add(AINode(
-                        id=node_id,
-                        name=node_item.get("name", ""),
-                        description=node_item.get("description", ""),
-                        category=node_item.get("category", "general"),
-                        icon=node_item.get("icon", "🤖"),
-                        color=node_item.get("color", "text-blue-400"),
-                        tags=node_item.get("tags", []),
-                        system_prompt=node_item.get("systemPrompt", ""),
-                        user_prompt_template=node_item.get("userPromptTemplate", ""),
-                        input_schema=node_item.get("inputSchema", {"type": "object", "properties": {}, "required": []}),
-                        output_schema=node_item.get("outputSchema", {"type": "object", "properties": {}, "required": []}),
-                        output_enforcement=node_item.get("outputEnforcement", {}),
-                        llm_config=node_item.get("llmConfig", {}),
-                        is_active=node_item.get("isActive", True),
-                    ))
+                async with async_session_maker() as s:
+                    existing = await s.get(AINode, node_id)
+                    if existing:
+                        existing.name = node_item.get("name", existing.name)
+                        existing.description = node_item.get("description", existing.description)
+                        existing.category = node_item.get("category", existing.category)
+                        existing.icon = node_item.get("icon", existing.icon)
+                        existing.color = node_item.get("color", existing.color)
+                        existing.tags = node_item.get("tags", existing.tags)
+                        existing.system_prompt = node_item.get("systemPrompt", existing.system_prompt)
+                        existing.user_prompt_template = node_item.get("userPromptTemplate", existing.user_prompt_template)
+                        existing.input_schema = node_item.get("inputSchema", existing.input_schema)
+                        existing.output_schema = node_item.get("outputSchema", existing.output_schema)
+                        existing.output_enforcement = node_item.get("outputEnforcement", existing.output_enforcement)
+                        existing.llm_config = node_item.get("llmConfig", existing.llm_config)
+                        existing.is_active = node_item.get("isActive", existing.is_active)
+                    else:
+                        s.add(AINode(
+                            id=node_id,
+                            name=node_item.get("name", ""),
+                            description=node_item.get("description", ""),
+                            category=node_item.get("category", "general"),
+                            icon=node_item.get("icon", "🤖"),
+                            color=node_item.get("color", "text-blue-400"),
+                            tags=node_item.get("tags", []),
+                            system_prompt=node_item.get("systemPrompt", ""),
+                            user_prompt_template=node_item.get("userPromptTemplate", ""),
+                            input_schema=node_item.get("inputSchema", {"type": "object", "properties": {}, "required": []}),
+                            output_schema=node_item.get("outputSchema", {"type": "object", "properties": {}, "required": []}),
+                            output_enforcement=node_item.get("outputEnforcement", {}),
+                            llm_config=node_item.get("llmConfig", {}),
+                            is_active=node_item.get("isActive", True),
+                        ))
+                    await s.commit()
             except Exception as e:
                 logger.warning(f"워크플로우 번들 - AI 노드 upsert 실패 id={node_id}: {e}")
 
-        # 2. API 정의 upsert
+        # 2. API 정의 upsert (개별 세션)
         for def_item in deps.get("apiDefinitions", []):
             def_id = def_item.get("id")
             if not def_id:
                 continue
-            existing = await db.get(ApiDefinition, def_id)
             try:
-                if existing:
-                    existing.name = def_item.get("name", existing.name)
-                    existing.description = def_item.get("description", existing.description)
-                    existing.icon = def_item.get("icon", existing.icon)
-                    existing.color = def_item.get("color", existing.color)
-                    existing.category = def_item.get("category", existing.category)
-                    existing.tags = def_item.get("tags", existing.tags)
-                    existing.method = def_item.get("method", existing.method)
-                    existing.url_template = def_item.get("urlTemplate", existing.url_template)
-                    existing.headers = def_item.get("headers", existing.headers)
-                    existing.body_template = def_item.get("bodyTemplate", existing.body_template)
-                    existing.auth_type = def_item.get("authType", existing.auth_type)
-                    existing.auth_config = def_item.get("authConfig", existing.auth_config)
-                    existing.parameters = def_item.get("parameters", existing.parameters)
-                    existing.response_schema = def_item.get("responseSchema", existing.response_schema)
-                    existing.is_active = def_item.get("isActive", existing.is_active)
-                else:
-                    db.add(ApiDefinition(
-                        id=def_id,
-                        name=def_item.get("name", ""),
-                        description=def_item.get("description", ""),
-                        icon=def_item.get("icon", "🌐"),
-                        color=def_item.get("color", "text-cyan-400"),
-                        category=def_item.get("category", ""),
-                        tags=def_item.get("tags", []),
-                        method=def_item.get("method", "GET"),
-                        url_template=def_item.get("urlTemplate", ""),
-                        headers=def_item.get("headers", {}),
-                        body_template=def_item.get("bodyTemplate"),
-                        auth_type=def_item.get("authType", "none"),
-                        auth_config=def_item.get("authConfig", {}),
-                        parameters=def_item.get("parameters", []),
-                        response_schema=def_item.get("responseSchema", {}),
-                        is_active=def_item.get("isActive", True),
-                    ))
+                async with async_session_maker() as s:
+                    existing = await s.get(ApiDefinition, def_id)
+                    if existing:
+                        existing.name = def_item.get("name", existing.name)
+                        existing.description = def_item.get("description", existing.description)
+                        existing.icon = def_item.get("icon", existing.icon)
+                        existing.color = def_item.get("color", existing.color)
+                        existing.category = def_item.get("category", existing.category)
+                        existing.tags = def_item.get("tags", existing.tags)
+                        existing.method = def_item.get("method", existing.method)
+                        existing.url_template = def_item.get("urlTemplate", existing.url_template)
+                        existing.headers = def_item.get("headers", existing.headers)
+                        existing.body_template = def_item.get("bodyTemplate", existing.body_template)
+                        existing.auth_type = def_item.get("authType", existing.auth_type)
+                        existing.auth_config = def_item.get("authConfig", existing.auth_config)
+                        existing.parameters = def_item.get("parameters", existing.parameters)
+                        existing.response_schema = def_item.get("responseSchema", existing.response_schema)
+                        existing.is_active = def_item.get("isActive", existing.is_active)
+                    else:
+                        s.add(ApiDefinition(
+                            id=def_id,
+                            name=def_item.get("name", ""),
+                            description=def_item.get("description", ""),
+                            icon=def_item.get("icon", "🌐"),
+                            color=def_item.get("color", "text-cyan-400"),
+                            category=def_item.get("category", ""),
+                            tags=def_item.get("tags", []),
+                            method=def_item.get("method", "GET"),
+                            url_template=def_item.get("urlTemplate", ""),
+                            headers=def_item.get("headers", {}),
+                            body_template=def_item.get("bodyTemplate"),
+                            auth_type=def_item.get("authType", "none"),
+                            auth_config=def_item.get("authConfig", {}),
+                            parameters=def_item.get("parameters", []),
+                            response_schema=def_item.get("responseSchema", {}),
+                            is_active=def_item.get("isActive", True),
+                        ))
+                    await s.commit()
             except Exception as e:
                 logger.warning(f"워크플로우 번들 - API 정의 upsert 실패 id={def_id}: {e}")
 
-        # 3. 지식 문서 upsert (파일 기반)
+        # 3. 지식 문서 upsert (파일 기반 — DB 세션 불필요)
         for doc_item in deps.get("knowledgeDocs", []):
             doc_id = doc_item.get("id")
             doc_title = doc_item.get("title", "")
@@ -591,93 +614,90 @@ async def import_workflows(
             except Exception as e:
                 logger.warning(f"워크플로우 번들 - 지식 문서 upsert 실패 id={doc_id}: {e}")
 
-        # 4. 워크플로우 upsert
+        # 4. 워크플로우 upsert (새 세션으로 격리)
         wf_id = wf_data.get("id")
         if not wf_id:
             total_skipped += 1
             continue
 
         try:
-            # Flush dependencies first so FK constraints are satisfied
-            await db.flush()
-
-            existing_wf = await db.get(Workflow, wf_id)
-            if existing_wf:
-                # Update workflow metadata
-                existing_wf.name = wf_data.get("name", existing_wf.name)
-                existing_wf.description = wf_data.get("description", existing_wf.description)
-                existing_wf.tags = wf_data.get("tags", existing_wf.tags)
-                existing_wf.viewport = wf_data.get("viewport", existing_wf.viewport)
-                existing_wf.trigger = wf_data.get("trigger", existing_wf.trigger)
-                existing_wf.variables = wf_data.get("variables", existing_wf.variables)
-
-                # Remove old nodes and connections (cascade handles it via delete-orphan)
-                for node in list(existing_wf.nodes):
-                    await db.delete(node)
-                for conn in list(existing_wf.connections):
-                    await db.delete(conn)
-                await db.flush()
-
-                total_updated += 1
-            else:
-                from ...models.workflow import WorkflowStatus
-                status_val = wf_data.get("status", "draft")
-                try:
-                    status = WorkflowStatus(status_val)
-                except ValueError:
-                    status = WorkflowStatus.DRAFT
-
-                existing_wf = Workflow(
-                    id=wf_id,
-                    name=wf_data.get("name", ""),
-                    description=wf_data.get("description"),
-                    status=status,
-                    tags=wf_data.get("tags", []),
-                    viewport=wf_data.get("viewport", {"x": 0, "y": 0, "zoom": 1}),
-                    trigger=wf_data.get("trigger", {"type": "manual", "config": {}}),
-                    variables=wf_data.get("variables", {}),
+            async with async_session_maker() as s:
+                existing_wf = await s.execute(
+                    select(Workflow)
+                    .where(Workflow.id == wf_id)
+                    .options(selectinload(Workflow.nodes), selectinload(Workflow.connections))
                 )
-                db.add(existing_wf)
-                await db.flush()
-                total_created += 1
+                existing_wf = existing_wf.scalar_one_or_none()
 
-            # Re-create nodes
-            for node_data in wf_data.get("nodes", []):
-                node_instance_id = node_data.get("id") or str(uuid.uuid4())
-                wf_node = WorkflowNode(
-                    id=node_instance_id,
-                    workflow_id=wf_id,
-                    node_id=node_data.get("nodeId", ""),
-                    definition_type=node_data.get("definitionType", "ai-custom"),
-                    ai_node_id=node_data.get("aiNodeId"),
-                    config=node_data.get("config", {}),
-                    name=node_data.get("name", ""),
-                    position=node_data.get("position", {"x": 0, "y": 0}),
-                    config_overrides=node_data.get("configOverrides", {}),
-                    input_mapping=node_data.get("inputMapping", {}),
-                )
-                db.add(wf_node)
+                if existing_wf:
+                    existing_wf.name = wf_data.get("name", existing_wf.name)
+                    existing_wf.description = wf_data.get("description", existing_wf.description)
+                    existing_wf.tags = wf_data.get("tags", existing_wf.tags)
+                    existing_wf.viewport = wf_data.get("viewport", existing_wf.viewport)
+                    existing_wf.trigger = wf_data.get("trigger", existing_wf.trigger)
+                    existing_wf.variables = wf_data.get("variables", existing_wf.variables)
 
-            # Re-create connections
-            for conn_data in wf_data.get("connections", []):
-                conn_id = conn_data.get("id") or str(uuid.uuid4())
-                wf_conn = WorkflowConnection(
-                    id=conn_id,
-                    workflow_id=wf_id,
-                    source_node_id=conn_data.get("sourceNodeId", ""),
-                    target_node_id=conn_data.get("targetNodeId", ""),
-                    source_handle=conn_data.get("sourceHandle"),
-                    target_handle=conn_data.get("targetHandle"),
-                    condition=conn_data.get("condition"),
-                )
-                db.add(wf_conn)
+                    for node in list(existing_wf.nodes):
+                        await s.delete(node)
+                    for conn in list(existing_wf.connections):
+                        await s.delete(conn)
+                    await s.flush()
+                    total_updated += 1
+                else:
+                    status_val = wf_data.get("status", "draft")
+                    try:
+                        status = WorkflowStatus(status_val)
+                    except ValueError:
+                        status = WorkflowStatus.DRAFT
+
+                    existing_wf = Workflow(
+                        id=wf_id,
+                        name=wf_data.get("name", ""),
+                        description=wf_data.get("description"),
+                        status=status,
+                        tags=wf_data.get("tags", []),
+                        viewport=wf_data.get("viewport", {"x": 0, "y": 0, "zoom": 1}),
+                        trigger=wf_data.get("trigger", {"type": "manual", "config": {}}),
+                        variables=wf_data.get("variables", {}),
+                    )
+                    s.add(existing_wf)
+                    await s.flush()
+                    total_created += 1
+
+                # Re-create nodes
+                for node_data in wf_data.get("nodes", []):
+                    s.add(WorkflowNode(
+                        id=node_data.get("id") or str(uuid.uuid4()),
+                        workflow_id=wf_id,
+                        node_id=node_data.get("nodeId", ""),
+                        definition_type=node_data.get("definitionType", "ai-custom"),
+                        ai_node_id=node_data.get("aiNodeId"),
+                        config=node_data.get("config", {}),
+                        name=node_data.get("name", ""),
+                        position=node_data.get("position", {"x": 0, "y": 0}),
+                        config_overrides=node_data.get("configOverrides", {}),
+                        input_mapping=node_data.get("inputMapping", {}),
+                    ))
+
+                # Re-create connections
+                for conn_data in wf_data.get("connections", []):
+                    s.add(WorkflowConnection(
+                        id=conn_data.get("id") or str(uuid.uuid4()),
+                        workflow_id=wf_id,
+                        source_node_id=conn_data.get("sourceNodeId", ""),
+                        target_node_id=conn_data.get("targetNodeId", ""),
+                        source_handle=conn_data.get("sourceHandle"),
+                        target_handle=conn_data.get("targetHandle"),
+                        condition=conn_data.get("condition"),
+                    ))
+
+                await s.commit()
 
         except Exception as e:
             logger.error(f"워크플로우 upsert 실패 id={wf_id}: {e}")
             total_skipped += 1
             continue
 
-    await db.commit()
     return {
         "created": total_created,
         "updated": total_updated,
