@@ -1,6 +1,8 @@
 import { memo, useContext } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { ConnectionDragContext } from './FactoryNode';
+import { NodeOutputPill } from './NodeOutputPill';
+import { ExecutionStatusBadge } from './ExecutionStatusBadge';
 
 export interface KnowledgeNodeData extends Record<string, unknown> {
   nodeId: string;
@@ -30,11 +32,22 @@ function KnowledgeNodeInner({ data, selected, id }: { data: KnowledgeNodeData; s
   if (config.category) filterParts.push(config.category);
   if (config.tags && config.tags.length > 0) filterParts.push(config.tags.join(', '));
 
+  const execStatus = data._executionStatus as string | undefined;
+  const execOutput = data._executionOutput;
+  const execError = data._executionError as string | undefined;
+  const execBorder = execStatus === 'running'
+    ? 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+    : execStatus === 'completed'
+      ? 'border-green-500 shadow-[0_0_12px_rgba(34,197,94,0.3)]'
+      : execStatus === 'failed'
+        ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+        : '';
+
   return (
     <div
-      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : 'from-indigo-600 to-indigo-800 border-indigo-400'} border-2 rounded-xl shadow-2xl min-w-[220px] max-w-[280px] transition-all ${
+      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : execBorder ? `from-indigo-600 to-indigo-800 ${execBorder}` : 'from-indigo-600 to-indigo-800 border-indigo-400'} border-2 rounded-xl shadow-2xl min-w-[220px] max-w-[280px] transition-all ${
         selected ? 'ring-2 ring-indigo-300 ring-offset-2 ring-offset-gray-900 scale-105' : ''
-      }${isInvalidTarget ? ' animate-pulse' : ''}`}
+      }${isInvalidTarget && !execStatus ? ' animate-pulse' : ''}`}
     >
       {/* Input Handle */}
       <Handle
@@ -61,6 +74,7 @@ function KnowledgeNodeInner({ data, selected, id }: { data: KnowledgeNodeData; s
             <div className="text-xs text-indigo-300/80 font-medium uppercase tracking-wider">지식 검색</div>
             <div className="text-white font-semibold text-sm truncate">{data.instanceName}</div>
           </div>
+          <ExecutionStatusBadge status={execStatus} />
         </div>
       </div>
 
@@ -104,6 +118,9 @@ function KnowledgeNodeInner({ data, selected, id }: { data: KnowledgeNodeData; s
           </span>
         </div>
       </div>
+
+      {/* Execution output pill */}
+      <NodeOutputPill status={execStatus} output={execOutput} error={execError} />
 
       {/* Decorative */}
       <div className="absolute -top-1 -right-1 text-indigo-400/15 text-2xl pointer-events-none">{'\u{1F4DA}'}</div>

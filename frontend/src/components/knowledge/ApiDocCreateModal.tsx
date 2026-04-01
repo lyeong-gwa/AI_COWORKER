@@ -485,7 +485,7 @@ export function ApiDocCreateModal({ onClose, onCreated }: ApiDocCreateModalProps
                     )}
 
                     {/* Response body */}
-                    {testResponse.data && (
+                    {testResponse.data !== undefined && testResponse.data !== null && (
                       <pre className="bg-gray-900 border border-gray-700 rounded-lg p-3 text-xs text-gray-300 font-mono overflow-auto max-h-[50vh] whitespace-pre-wrap">
                         {typeof testResponse.data === 'string'
                           ? testResponse.data

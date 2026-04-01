@@ -2,6 +2,8 @@ import { memo, useState, useEffect, useContext } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { factoryApi } from '../../services/api';
 import { ConnectionDragContext } from './FactoryNode';
+import { NodeOutputPill } from './NodeOutputPill';
+import { ExecutionStatusBadge } from './ExecutionStatusBadge';
 
 export interface MarkdownViewerNodeData extends Record<string, unknown> {
   nodeId: string;
@@ -15,6 +17,17 @@ function MarkdownViewerNodeInner({ data, selected, id }: { data: MarkdownViewerN
   const connectionDrag = useContext(ConnectionDragContext);
   const [itemCount, setItemCount] = useState<number>(0);
   const isInvalidTarget = connectionDrag?.invalidTargetIds.has(id) ?? false;
+
+  const execStatus = data._executionStatus as string | undefined;
+  const execOutput = data._executionOutput;
+  const execError = data._executionError as string | undefined;
+  const execBorder = execStatus === 'running'
+    ? 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+    : execStatus === 'completed'
+      ? 'border-green-500 shadow-[0_0_12px_rgba(34,197,94,0.3)]'
+      : execStatus === 'failed'
+        ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+        : '';
 
   useEffect(() => {
     let mounted = true;
@@ -30,7 +43,7 @@ function MarkdownViewerNodeInner({ data, selected, id }: { data: MarkdownViewerN
   }, [id]);
 
   return (
-    <div className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : 'from-indigo-700 to-indigo-900 border-indigo-400'} border-2 rounded-xl shadow-2xl min-w-[200px] transition-all ${selected ? 'ring-2 ring-indigo-300 ring-offset-2 ring-offset-gray-900 scale-105' : ''}${isInvalidTarget ? ' animate-pulse' : ''}`}>
+    <div className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : execBorder ? `from-indigo-700 to-indigo-900 ${execBorder}` : 'from-indigo-700 to-indigo-900 border-indigo-400'} border-2 rounded-xl shadow-2xl min-w-[200px] transition-all ${selected ? 'ring-2 ring-indigo-300 ring-offset-2 ring-offset-gray-900 scale-105' : ''}${isInvalidTarget && !execStatus ? ' animate-pulse' : ''}`}>
       {/* Input Handle */}
       <Handle type="target" position={Position.Left} id="input" style={{ background: '#312e81', border: '3px solid #818cf8', width: 16, height: 16, top: '50%' }} title="입력" />
 
@@ -42,6 +55,7 @@ function MarkdownViewerNodeInner({ data, selected, id }: { data: MarkdownViewerN
             <div className="text-xs text-indigo-300/80 font-medium uppercase tracking-wider">마크다운 뷰어</div>
             <div className="text-white font-semibold text-sm truncate">{data.instanceName}</div>
           </div>
+          <ExecutionStatusBadge status={execStatus} />
         </div>
       </div>
 
@@ -58,6 +72,9 @@ function MarkdownViewerNodeInner({ data, selected, id }: { data: MarkdownViewerN
           </span>
         </div>
       </div>
+
+      {/* Execution output pill */}
+      <NodeOutputPill status={execStatus} output={execOutput} error={execError} />
 
       {/* Decorative */}
       <div className="absolute -top-1 -right-1 text-indigo-400/15 text-2xl pointer-events-none">📄</div>

@@ -5,7 +5,7 @@ import { ChatAssistant } from './ChatAssistant';
 import { healthApi } from '../../services/api';
 
 const navItems = [
-  { path: '/', label: '태스크 보드', icon: '📋', shortcut: '1' },
+  { path: '/', label: '대시보드', icon: '📊', shortcut: '1' },
   { path: '/knowledge', label: '지식 베이스', icon: '📚', shortcut: '2' },
   { path: '/api-definitions', label: 'API 정의', icon: '🌐', shortcut: '3' },
   { path: '/nodes', label: '노드 관리', icon: '🔷', shortcut: '4' },

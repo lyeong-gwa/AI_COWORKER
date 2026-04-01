@@ -2,10 +2,6 @@
 Pydantic Schemas for API validation (camelCase 지원)
 """
 
-from .task import (
-    TaskCreate, TaskUpdate, TaskResponse,
-    TodoItem, Comment, ActivityLog,
-)
 from .knowledge import (
     KnowledgeCreate, KnowledgeUpdate,
     KnowledgeSearchRequest,
@@ -36,9 +32,6 @@ from .api_definition import (
 )
 
 __all__ = [
-    # Task
-    'TaskCreate', 'TaskUpdate', 'TaskResponse',
-    'TodoItem', 'Comment', 'ActivityLog',
     # Knowledge
     'KnowledgeCreate', 'KnowledgeUpdate',
     'KnowledgeSearchRequest',

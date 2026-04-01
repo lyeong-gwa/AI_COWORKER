@@ -7,7 +7,6 @@ import { ChatActionBar } from '../chat/ChatActionBar';
 
 function getContextIcon(contextType: ChatContextType['type']): string {
   switch (contextType) {
-    case 'task': return '📋';
     case 'node': return '🔷';
     case 'workflow': return '⚙️';
     case 'document': return '📚';
@@ -17,7 +16,6 @@ function getContextIcon(contextType: ChatContextType['type']): string {
 
 function getContextLabel(context: ChatContextType): string {
   switch (context.type) {
-    case 'task': return `[태스크] ${context.data.title}`;
     case 'node': return `[노드] ${context.data.name}`;
     case 'workflow': return `[워크플로우] ${context.data.name}`;
     case 'document': return `[문서] ${context.data.title}`;
@@ -26,14 +24,11 @@ function getContextLabel(context: ChatContextType): string {
 }
 
 function getPlaceholder(mode: ChatMode, action: ChatAction | null): string {
-  if (mode === 'taskboard') {
-    if (action === 'create') return '이메일 내용이나 작업 내용을 붙여넣으세요...';
-    if (action === 'search') return '찾고 싶은 태스크를 설명하세요...';
-    return '태스크에 대해 물어보세요...';
-  }
   if (mode === 'knowledge') return '지식 베이스에서 검색하거나 질문하세요...';
   if (mode === 'node') return '노드 수정 사항을 설명하세요...';
   if (mode === 'workflow') return '워크플로우 수정 사항을 설명하세요...';
+  // suppress unused param warning
+  void action;
   return '메시지를 입력하세요...';
 }
 

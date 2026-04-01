@@ -73,76 +73,6 @@ async function request<T>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Task API
-// ─────────────────────────────────────────────────────────────────────────────
-
-import type { Task, TaskStatus, TaskPriority } from '../types';
-
-export interface CreateTaskData {
-  title: string;
-  description?: string;
-  status?: TaskStatus;
-  priority?: TaskPriority;
-  tags?: string[];
-  assigneeId?: string;
-  assigneeName?: string;
-  dueDate?: string;
-  relatedNodeId?: string;
-}
-
-export interface UpdateTaskData extends Partial<CreateTaskData> {
-  todos?: Array<{ id: string; text: string; completed: boolean }>;
-  comments?: Array<{ id: string; userId: string; userName: string; content: string; createdAt: string }>;
-  activityLog?: Array<{ id: string; userId: string; userName: string; action: string; details?: string; createdAt: string }>;
-}
-
-export const taskApi = {
-  /** 태스크 목록 조회 */
-  list: (status?: TaskStatus): Promise<Task[]> =>
-    request(`/tasks${status ? `?status=${status}` : ''}`),
-
-  /** 태스크 상세 조회 */
-  get: (id: string): Promise<Task> =>
-    request(`/tasks/${id}`),
-
-  /** 태스크 생성 */
-  create: (data: CreateTaskData): Promise<Task> =>
-    request('/tasks', { method: 'POST', body: JSON.stringify(data) }),
-
-  /** 태스크 수정 */
-  update: (id: string, data: UpdateTaskData): Promise<Task> =>
-    request(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-
-  /** 태스크 상태 변경 */
-  updateStatus: (id: string, status: TaskStatus): Promise<Task> =>
-    request(`/tasks/${id}/status?status=${status}`, { method: 'PATCH' }),
-
-  /** 태스크 삭제 */
-  delete: (id: string): Promise<void> =>
-    request(`/tasks/${id}`, { method: 'DELETE' }),
-
-  /** 댓글 삭제 */
-  deleteComment: async (taskId: string, commentId: string): Promise<void> => {
-    await request(`/tasks/${taskId}/comments/${commentId}`, { method: 'DELETE' });
-  },
-
-  /** 활동 이력 삭제 */
-  deleteActivity: async (taskId: string, logId: string): Promise<void> => {
-    await request(`/tasks/${taskId}/activity/${logId}`, { method: 'DELETE' });
-  },
-
-  /** 참조 자료 추가 */
-  addReference: async (taskId: string, ref: { docId: string; title: string; content: string; category: string }): Promise<Task> => {
-    return request(`/tasks/${taskId}/references`, { method: 'POST', body: JSON.stringify(ref) });
-  },
-
-  /** 참조 자료 삭제 */
-  deleteReference: async (taskId: string, docId: string): Promise<void> => {
-    await request(`/tasks/${taskId}/references/${docId}`, { method: 'DELETE' });
-  },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Knowledge API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -204,8 +134,8 @@ export const knowledgeApi = {
   search: (data: SearchKnowledgeData): Promise<KnowledgeSearchResult[]> =>
     request('/knowledge/search', { method: 'POST', body: JSON.stringify(data) }),
 
-  /** 고유 카테고리/태그 목록 조회 */
-  meta: (): Promise<{ categories: string[]; tags: string[] }> =>
+  /** 고유 카테고리/태그 목록 + 카테고리별 태그 매핑 조회 */
+  meta: (): Promise<{ categories: string[]; tags: string[]; categoryTags: Record<string, string[]> }> =>
     request('/knowledge/meta'),
 };
 
@@ -650,6 +580,40 @@ export const healthApi = {
     if (!response.ok) throw new Error('Health check failed');
     return response.json();
   },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Export / Import API
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+}
+
+export const exportImportApi = {
+  exportNodes: (): Promise<any[]> =>
+    request('/export/nodes'),
+  importNodes: (data: any[]): Promise<ImportResult> =>
+    request('/import/nodes', { method: 'POST', body: JSON.stringify(data) }),
+
+  exportApiDefinitions: (): Promise<any[]> =>
+    request('/export/api-definitions'),
+  importApiDefinitions: (data: any[]): Promise<ImportResult> =>
+    request('/import/api-definitions', { method: 'POST', body: JSON.stringify(data) }),
+
+  exportKnowledge: (): Promise<any[]> =>
+    request('/export/knowledge'),
+  importKnowledge: (data: any[]): Promise<ImportResult> =>
+    request('/import/knowledge', { method: 'POST', body: JSON.stringify(data) }),
+
+  exportWorkflow: (id: string): Promise<any> =>
+    request(`/export/workflows/${id}`),
+  exportAllWorkflows: (): Promise<any[]> =>
+    request('/export/workflows'),
+  importWorkflows: (data: any[]): Promise<ImportResult> =>
+    request('/import/workflows', { method: 'POST', body: JSON.stringify(data) }),
 };
 
 // Export error class

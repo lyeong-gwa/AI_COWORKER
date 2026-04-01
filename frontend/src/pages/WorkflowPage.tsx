@@ -1,3 +1,7 @@
+/**
+ * @deprecated 이 페이지는 FactoryPage로 대체되었습니다.
+ * 다중 워크플로우 지원이 필요할 경우 FactoryPage를 확장하세요.
+ */
 import { useState, useCallback, useRef, useMemo, useEffect, createContext, useContext } from 'react';
 import type { DragEvent } from 'react';
 import {

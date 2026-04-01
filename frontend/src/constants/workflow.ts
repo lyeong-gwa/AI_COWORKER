@@ -28,6 +28,12 @@ export const DEF_TYPE = {
   // 출력
   RESULT: 'result',
   MARKDOWN_VIEWER: 'markdown-viewer',
+  // 액션 (산출물)
+  DELIVERABLE_GENERATOR: 'deliverable-generator',
+  // 산출물 파이프라인 (3-step)
+  MILESTONE_COLLECTOR: 'milestone-collector',
+  DEV_DELIVERABLE_GEN: 'dev-deliverable-gen',
+  REVIEW_DELIVERABLE_GEN: 'review-deliverable-gen',
 } as const;
 
 export type DefinitionType = (typeof DEF_TYPE)[keyof typeof DEF_TYPE];

@@ -16,7 +16,7 @@ from datetime import datetime
 
 class ChatContextBase(BaseModel):
     """선택된 요소 컨텍스트 (프론트엔드에서 전달)"""
-    type: Literal['none', 'task', 'tool', 'node', 'workflow', 'document']
+    type: Literal['none', 'tool', 'node', 'workflow', 'document']
     id: Optional[str] = None  # type이 'none'이 아닐 때 요소 ID
 
 
@@ -35,7 +35,7 @@ class ChatMessageRequest(BaseModel):
         default=None,
         description="세션 ID (없으면 새 세션 생성)"
     )
-    mode: Optional[Literal['general', 'taskboard', 'knowledge', 'tool', 'node', 'workflow']] = Field(
+    mode: Optional[Literal['general', 'knowledge', 'tool', 'node', 'workflow']] = Field(
         default=None,
         description="채팅 모드 (페이지별 자동 설정)"
     )
@@ -53,11 +53,11 @@ class ChatMessageRequest(BaseModel):
             "example": {
                 "content": "이 태스크의 상태를 '진행 중'으로 변경해줘",
                 "context": {
-                    "type": "task",
-                    "id": "task-123"
+                    "type": "workflow",
+                    "id": "workflow-123"
                 },
                 "sessionId": "session-abc",
-                "mode": "taskboard",
+                "mode": "knowledge",
                 "action": "modify"
             }
         }

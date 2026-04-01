@@ -93,11 +93,30 @@ async def list_documents(
 
 @router.get("/meta")
 async def get_metadata():
-    """지식 문서의 고유 카테고리/태그 목록 반환"""
+    """지식 문서의 고유 카테고리/태그 목록 + 카테고리별 태그 매핑 반환"""
     docs = list_md_files()
     categories = sorted({d.category for d in docs if d.category})
     tags = sorted({t for d in docs for t in d.tags if t})
-    return {"categories": categories, "tags": tags}
+
+    # 카테고리별 태그 빈도 집계
+    from collections import Counter
+    cat_tag_counters: dict[str, Counter] = {}
+    for d in docs:
+        if not d.category:
+            continue
+        if d.category not in cat_tag_counters:
+            cat_tag_counters[d.category] = Counter()
+        for t in d.tags:
+            if t:
+                cat_tag_counters[d.category][t] += 1
+
+    # 빈도순 정렬
+    category_tags: dict[str, list[str]] = {
+        cat: [tag for tag, _ in counter.most_common()]
+        for cat, counter in sorted(cat_tag_counters.items())
+    }
+
+    return {"categories": categories, "tags": tags, "categoryTags": category_tags}
 
 
 @router.get("/{doc_id}")

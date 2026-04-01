@@ -164,9 +164,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // Generate local fallback response based on context
       if (selectedContext.type !== 'none') {
         switch (selectedContext.type) {
-          case 'task':
-            fallbackContent = `[오프라인] 선택된 태스크: "${selectedContext.data.title}"\n서버 연결 후 작업이 가능합니다.`;
-            break;
           case 'node':
             fallbackContent = `[오프라인] 선택된 노드: "${selectedContext.data.name}"\n서버 연결 후 작업이 가능합니다.`;
             break;
@@ -196,9 +193,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setSelectedContext(context);
     // 컨텍스트 타입에 따라 자동 모드 설정
     switch (context.type) {
-      case 'task':
-        setActiveMode('taskboard');
-        break;
       case 'node':
         setActiveMode('node');
         break;

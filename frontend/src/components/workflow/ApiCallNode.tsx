@@ -1,6 +1,8 @@
 import { memo, useContext } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { ConnectionDragContext } from './FactoryNode';
+import { NodeOutputPill } from './NodeOutputPill';
+import { ExecutionStatusBadge } from './ExecutionStatusBadge';
 
 export interface ApiCallNodeData extends Record<string, unknown> {
   nodeId: string;
@@ -36,11 +38,22 @@ function ApiCallNodeInner({ data, selected, id }: { data: ApiCallNodeData; selec
     DELETE: 'bg-red-600/60 text-red-200',
   };
 
+  const execStatus = data._executionStatus as string | undefined;
+  const execOutput = data._executionOutput;
+  const execError = data._executionError as string | undefined;
+  const execBorder = execStatus === 'running'
+    ? 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+    : execStatus === 'completed'
+      ? 'border-green-500 shadow-[0_0_12px_rgba(34,197,94,0.3)]'
+      : execStatus === 'failed'
+        ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+        : '';
+
   return (
     <div
-      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : 'from-cyan-700 to-cyan-900 border-cyan-400'} border-2 rounded-xl shadow-2xl min-w-[220px] max-w-[280px] transition-all ${
+      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : execBorder ? `from-cyan-700 to-cyan-900 ${execBorder}` : 'from-cyan-700 to-cyan-900 border-cyan-400'} border-2 rounded-xl shadow-2xl min-w-[220px] max-w-[280px] transition-all ${
         selected ? 'ring-2 ring-cyan-300 ring-offset-2 ring-offset-gray-900 scale-105' : ''
-      }${isInvalidTarget ? ' animate-pulse' : ''}`}
+      }${isInvalidTarget && !execStatus ? ' animate-pulse' : ''}`}
     >
       {/* Input Handle */}
       <Handle
@@ -67,6 +80,7 @@ function ApiCallNodeInner({ data, selected, id }: { data: ApiCallNodeData; selec
             <div className="text-xs text-cyan-300/80 font-medium uppercase tracking-wider">API 호출기</div>
             <div className="text-white font-semibold text-sm truncate">{data.instanceName}</div>
           </div>
+          <ExecutionStatusBadge status={execStatus} />
         </div>
       </div>
 
@@ -120,6 +134,9 @@ function ApiCallNodeInner({ data, selected, id }: { data: ApiCallNodeData; selec
           </div>
         )}
       </div>
+
+      {/* Execution output pill */}
+      <NodeOutputPill status={execStatus} output={execOutput} error={execError} />
 
       {/* Decorative */}
       <div className="absolute -top-1 -right-1 text-cyan-400/15 text-2xl pointer-events-none">🌐</div>

@@ -71,7 +71,7 @@ function deriveTriggerFields(
 
         for (const [propName, propDef] of Object.entries(aiNode.inputSchema.properties)) {
           if (seen.has(propName)) continue;
-          const propType = (propDef as Record<string, unknown>).type as string || 'string';
+          const propType = (propDef as unknown as Record<string, unknown>).type as string || 'string';
           // Skip array fields (auto-populated by upstream nodes like knowledge search)
           if (propType === 'array' || propType === 'object') continue;
           seen.add(propName);
@@ -79,10 +79,10 @@ function deriveTriggerFields(
           fields.push({
             name: propName,
             type: propType,
-            description: (propDef as Record<string, unknown>).description as string || '',
+            description: (propDef as unknown as Record<string, unknown>).description as string || '',
             required: required.includes(propName),
             sourceNodeName: aiNode.name,
-            enum: (propDef as Record<string, unknown>).enum as string[] | undefined,
+            enum: (propDef as unknown as Record<string, unknown>).enum as string[] | undefined,
           });
         }
       }

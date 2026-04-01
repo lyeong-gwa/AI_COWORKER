@@ -13,10 +13,6 @@ interface ActionConfig {
 }
 
 const MODE_ACTIONS: Partial<Record<ChatMode, ActionConfig[]>> = {
-  taskboard: [
-    { action: 'create', label: '새 태스크 생성', icon: '\uD83D\uDCDD' },
-    { action: 'search', label: '이력 조회', icon: '\uD83D\uDD0D' },
-  ],
   knowledge: [
     { action: 'search', label: '검색/질문', icon: '\uD83D\uDD0D' },
     { action: 'modify', label: '수정 요청', icon: '\u270F\uFE0F' },

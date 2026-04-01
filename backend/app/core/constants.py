@@ -44,6 +44,10 @@ class NodeDefType(str, Enum):
     SEND_EMAIL = "send-email"
     API_CALL = "api-call"
     KNOWLEDGE = "knowledge"
+    DELIVERABLE_GENERATOR = "deliverable-generator"
+    MILESTONE_COLLECTOR = "milestone-collector"
+    DEV_DELIVERABLE_GEN = "dev-deliverable-gen"
+    REVIEW_DELIVERABLE_GEN = "review-deliverable-gen"
 
     # 출력
     RESULT = "result"

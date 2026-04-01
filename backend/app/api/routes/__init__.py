@@ -2,6 +2,6 @@
 API Routes
 """
 
-from . import tasks, knowledge, tools, nodes, workflows, chat
+from . import knowledge, nodes, workflows, chat, export_import
 
-__all__ = ['tasks', 'knowledge', 'tools', 'nodes', 'workflows', 'chat']
+__all__ = ['knowledge', 'nodes', 'workflows', 'chat', 'export_import']

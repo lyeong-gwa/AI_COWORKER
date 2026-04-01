@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { mockDocuments } from '../data/mockData';
 import { knowledgeApi } from '../services/api';
 import { useToast } from '../components/common/Toast';
+import { TagInput } from '../components/common/TagInput';
 import { useChatAssistant } from '../hooks/useChatAssistant';
 import { useChatContext } from '../contexts/ChatContext';
 import type { KnowledgeDocument } from '../types';
@@ -11,6 +12,199 @@ import type { KnowledgeSearchResult } from '../services/api';
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Markdown Preview
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MarkdownPreview({ content, className = '' }: { content: string; className?: string }) {
+  const renderInline = (text: string): React.ReactNode[] => {
+    const parts: React.ReactNode[] = [];
+    // Process inline patterns: bold, italic, inline code, links
+    const pattern = /(\*\*(.+?)\*\*)|(`(.+?)`)|(\*(.+?)\*)|(\[(.+?)\]\((.+?)\))/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let key = 0;
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(text.slice(lastIndex, match.index));
+      }
+      if (match[1]) {
+        parts.push(<strong key={key++} className="font-semibold text-gray-100">{match[2]}</strong>);
+      } else if (match[3]) {
+        parts.push(<code key={key++} className="px-1 py-0.5 rounded bg-gray-700 text-amber-300 font-mono text-sm">{match[4]}</code>);
+      } else if (match[5]) {
+        parts.push(<em key={key++} className="italic text-gray-300">{match[6]}</em>);
+      } else if (match[7]) {
+        parts.push(<a key={key++} href={match[9]} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">{match[8]}</a>);
+      }
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < text.length) {
+      parts.push(text.slice(lastIndex));
+    }
+    return parts;
+  };
+
+  const lines = content.split('\n');
+  const elements: React.ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Code block
+    if (line.startsWith('```')) {
+      const lang = line.slice(3).trim();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith('```')) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      elements.push(
+        <div key={key++} className="my-3">
+          {lang && (
+            <div className="bg-gray-700 text-gray-400 text-xs px-3 py-1 rounded-t-md font-mono">{lang}</div>
+          )}
+          <pre className={`bg-gray-950 text-gray-200 font-mono text-sm p-3 overflow-x-auto ${lang ? 'rounded-b-md' : 'rounded-md'}`}>
+            {codeLines.join('\n')}
+          </pre>
+        </div>
+      );
+      i++;
+      continue;
+    }
+
+    // Table
+    if (line.includes('|') && i + 1 < lines.length && lines[i + 1].match(/^\s*\|?[\s\-:]+\|/)) {
+      const tableRows: string[][] = [];
+      const parseRow = (r: string) =>
+        r.split('|').map(cell => cell.trim()).filter((_cell, idx, arr) => idx > 0 && idx < arr.length - 1 || (r.trim().startsWith('|') ? idx > 0 : true));
+      tableRows.push(parseRow(line));
+      i += 2; // skip separator
+      while (i < lines.length && lines[i].includes('|')) {
+        tableRows.push(parseRow(lines[i]));
+        i++;
+      }
+      const [header, ...rows] = tableRows;
+      elements.push(
+        <div key={key++} className="my-3 overflow-x-auto">
+          <table className="min-w-full border-collapse text-sm">
+            <thead>
+              <tr>
+                {header.map((cell, ci) => (
+                  <th key={ci} className="border border-gray-600 bg-gray-700 px-3 py-1.5 text-left text-gray-200 font-medium">{renderInline(cell)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={ri} className="even:bg-gray-800/50">
+                  {row.map((cell, ci) => (
+                    <td key={ci} className="border border-gray-700 px-3 py-1.5 text-gray-300">{renderInline(cell)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
+    // Heading H1
+    if (line.startsWith('# ')) {
+      elements.push(<h1 key={key++} className="text-lg font-bold text-blue-300 mt-4 mb-2">{renderInline(line.slice(2))}</h1>);
+      i++;
+      continue;
+    }
+
+    // Heading H2
+    if (line.startsWith('## ')) {
+      elements.push(<h2 key={key++} className="text-base font-bold text-blue-400 mt-3 mb-1.5">{renderInline(line.slice(3))}</h2>);
+      i++;
+      continue;
+    }
+
+    // Heading H3
+    if (line.startsWith('### ')) {
+      elements.push(<h3 key={key++} className="text-sm font-bold text-blue-400 mt-2 mb-1">{renderInline(line.slice(4))}</h3>);
+      i++;
+      continue;
+    }
+
+    // Horizontal rule
+    if (line.match(/^---+$/) || line.match(/^\*\*\*+$/)) {
+      elements.push(<hr key={key++} className="border-gray-600 my-3" />);
+      i++;
+      continue;
+    }
+
+    // Blockquote
+    if (line.startsWith('> ')) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && lines[i].startsWith('> ')) {
+        quoteLines.push(lines[i].slice(2));
+        i++;
+      }
+      elements.push(
+        <div key={key++} className="border-l-4 border-gray-600 pl-3 my-2 text-gray-400 italic">
+          {quoteLines.map((ql, qi) => <p key={qi}>{renderInline(ql)}</p>)}
+        </div>
+      );
+      continue;
+    }
+
+    // Bullet list
+    if (line.match(/^[-*] /)) {
+      const listItems: string[] = [];
+      while (i < lines.length && lines[i].match(/^[-*] /)) {
+        listItems.push(lines[i].slice(2));
+        i++;
+      }
+      elements.push(
+        <ul key={key++} className="list-disc list-inside my-2 space-y-0.5 text-gray-300">
+          {listItems.map((item, li) => <li key={li}>{renderInline(item)}</li>)}
+        </ul>
+      );
+      continue;
+    }
+
+    // Numbered list
+    if (line.match(/^\d+\. /)) {
+      const listItems: string[] = [];
+      while (i < lines.length && lines[i].match(/^\d+\. /)) {
+        listItems.push(lines[i].replace(/^\d+\. /, ''));
+        i++;
+      }
+      elements.push(
+        <ol key={key++} className="list-decimal list-inside my-2 space-y-0.5 text-gray-300">
+          {listItems.map((item, li) => <li key={li}>{renderInline(item)}</li>)}
+        </ol>
+      );
+      continue;
+    }
+
+    // Empty line
+    if (line.trim() === '') {
+      elements.push(<div key={key++} className="h-2" />);
+      i++;
+      continue;
+    }
+
+    // Paragraph
+    elements.push(
+      <p key={key++} className="text-gray-300 leading-relaxed">
+        {renderInline(line)}
+      </p>
+    );
+    i++;
+  }
+
+  return <div className={`text-sm ${className}`}>{elements}</div>;
+}
 
 const CATEGORY_OPTIONS = [
   { value: '', label: '전체 카테고리' },
@@ -143,6 +337,12 @@ function DocumentCard({
         {doc.contentHash && <span>#{doc.contentHash.slice(0, 8)}</span>}
       </div>
 
+      {/* Content preview */}
+      <p className="text-sm text-gray-400 line-clamp-2 mb-2 leading-relaxed">
+        {doc.content.replace(/^#{1,3}\s+/gm, '').replace(/[*_`~#>]/g, '').slice(0, 120)}
+        {doc.content.length > 120 ? '...' : ''}
+      </p>
+
       {/* Tags */}
       <div className="flex flex-wrap gap-1">
         {doc.tags.map((tag) => (
@@ -235,10 +435,16 @@ function DocumentCreateModal({
   onClose,
   onCreated,
   isApiMode,
+  availableTags,
+  categoryTags,
+  categoryOptions,
 }: {
   onClose: () => void;
   onCreated: (doc: KnowledgeDocument) => void;
   isApiMode: boolean;
+  availableTags: string[];
+  categoryTags: Record<string, string[]>;
+  categoryOptions: { value: string; label: string }[];
 }) {
   const { toast } = useToast();
   const [form, setForm] = useState<CreateFormData>(emptyCreateForm);
@@ -346,7 +552,7 @@ function DocumentCreateModal({
               className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="">선택하세요</option>
-              {CATEGORY_OPTIONS.filter((c) => c.value !== '').map((c) => (
+              {categoryOptions.filter((c) => c.value !== '').map((c) => (
                 <option key={c.value} value={c.value}>
                   {c.label}
                 </option>
@@ -371,15 +577,42 @@ function DocumentCreateModal({
           {/* Tags */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
-              태그 (쉼표로 구분)
+              태그
             </label>
-            <input
-              name="tags"
+            <TagInput
               value={form.tags}
-              onChange={handleChange}
+              onChange={(val) => setForm((prev) => ({ ...prev, tags: val }))}
+              availableTags={availableTags}
               placeholder="예: api, documentation, guide"
-              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
+            {/* 카테고리별 추천 태그 */}
+            {form.category && categoryTags[form.category] && (() => {
+              const currentTags = form.tags.split(',').map(t => t.trim()).filter(Boolean);
+              const suggestions = categoryTags[form.category].filter(t => !currentTags.includes(t));
+              if (suggestions.length === 0) return null;
+              return (
+                <div className="mt-2">
+                  <span className="text-xs text-gray-500 mr-2">추천:</span>
+                  <div className="inline-flex flex-wrap gap-1">
+                    {suggestions.slice(0, 12).map(tag => (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          const next = currentTags.length > 0
+                            ? [...currentTags, tag].join(', ')
+                            : tag;
+                          setForm(prev => ({ ...prev, tags: next }));
+                        }}
+                        className="px-2 py-0.5 text-xs rounded bg-gray-800 text-gray-400 border border-gray-700 hover:bg-blue-900/40 hover:text-blue-300 hover:border-blue-600/50 transition-colors"
+                      >
+                        + {tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Content */}
@@ -432,16 +665,21 @@ function DocumentDetailModal({
   onUpdated,
   onDeleted,
   isApiMode,
+  availableTags,
+  categoryTags,
 }: {
   doc: KnowledgeDocument;
   onClose: () => void;
   onUpdated: (doc: KnowledgeDocument) => void;
   onDeleted: (id: string) => void;
   isApiMode: boolean;
+  availableTags: string[];
+  categoryTags: Record<string, string[]>;
 }) {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'content' | 'vector' | 'api'>('content');
   const [isEditing, setIsEditing] = useState(false);
+  const [contentView, setContentView] = useState<'raw' | 'preview'>('preview');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -689,13 +927,41 @@ function DocumentDetailModal({
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-300 mb-1">
-                        태그 (쉼표 구분)
+                        태그
                       </label>
-                      <input
+                      <TagInput
                         value={editTags}
-                        onChange={(e) => setEditTags(e.target.value)}
-                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        onChange={setEditTags}
+                        availableTags={availableTags}
                       />
+                      {/* 카테고리별 추천 태그 */}
+                      {editCategory && categoryTags[editCategory] && (() => {
+                        const currentTags = editTags.split(',').map(t => t.trim()).filter(Boolean);
+                        const suggestions = categoryTags[editCategory].filter(t => !currentTags.includes(t));
+                        if (suggestions.length === 0) return null;
+                        return (
+                          <div className="mt-2">
+                            <span className="text-xs text-gray-500 mr-2">추천:</span>
+                            <div className="inline-flex flex-wrap gap-1">
+                              {suggestions.slice(0, 12).map(tag => (
+                                <button
+                                  key={tag}
+                                  type="button"
+                                  onClick={() => {
+                                    const next = currentTags.length > 0
+                                      ? [...currentTags, tag].join(', ')
+                                      : tag;
+                                    setEditTags(next);
+                                  }}
+                                  className="px-2 py-0.5 text-xs rounded bg-gray-800 text-gray-400 border border-gray-700 hover:bg-blue-900/40 hover:text-blue-300 hover:border-blue-600/50 transition-colors"
+                                >
+                                  + {tag}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 )}
@@ -714,10 +980,43 @@ function DocumentDetailModal({
                     />
                   </div>
                 ) : (
-                  <div className="bg-gray-900 rounded-lg p-4 font-mono text-sm">
-                    <pre className="whitespace-pre-wrap text-gray-300">
-                      {doc.content}
-                    </pre>
+                  <div>
+                    {/* View mode toggle */}
+                    <div className="flex items-center gap-1 mb-2">
+                      <button
+                        onClick={() => setContentView('preview')}
+                        className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                          contentView === 'preview'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-700 text-gray-400 hover:text-gray-200'
+                        }`}
+                      >
+                        프리뷰
+                      </button>
+                      <button
+                        onClick={() => setContentView('raw')}
+                        className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                          contentView === 'raw'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-700 text-gray-400 hover:text-gray-200'
+                        }`}
+                      >
+                        원문
+                      </button>
+                    </div>
+
+                    {/* Content */}
+                    {contentView === 'raw' ? (
+                      <div className="bg-gray-900 rounded-lg p-4 font-mono text-sm">
+                        <pre className="whitespace-pre-wrap text-gray-300">
+                          {doc.content}
+                        </pre>
+                      </div>
+                    ) : (
+                      <div className="bg-gray-900 rounded-lg p-5">
+                        <MarkdownPreview content={doc.content} />
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1025,6 +1324,8 @@ export function KnowledgeBasePage() {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [isApiMode, setIsApiMode] = useState(false);
+  const [metaTags, setMetaTags] = useState<string[]>([]);
+  const [categoryTags, setCategoryTags] = useState<Record<string, string[]>>({});
 
   // UI state
   const [selectedDoc, setSelectedDoc] = useState<KnowledgeDocument | null>(null);
@@ -1063,6 +1364,16 @@ export function KnowledgeBasePage() {
   useEffect(() => {
     loadDocuments();
   }, [loadDocuments]);
+
+  // meta API로 전체 태그 목록 로드 (마운트 시 1회)
+  useEffect(() => {
+    knowledgeApi.meta().then((meta) => {
+      setMetaTags(meta.tags);
+      if (meta.categoryTags) setCategoryTags(meta.categoryTags);
+    }).catch(() => {
+      // API 실패 시 무시 (availableTags useMemo에서 로컬 집계로 대체됨)
+    });
+  }, []);
 
   useEffect(() => {
     return onDataChange((target) => {
@@ -1240,13 +1551,14 @@ export function KnowledgeBasePage() {
     setSelectedDoc(null);
   };
 
-  // ── Unique tags from documents ───────────────────────────────────────────
+  // ── Unique tags from documents + meta API 결과 병합 ─────────────────────────
 
   const availableTags = useMemo(() => {
     const tagSet = new Set<string>();
     documents.forEach(d => d.tags.forEach(t => tagSet.add(t)));
+    metaTags.forEach(t => tagSet.add(t));
     return Array.from(tagSet).sort();
-  }, [documents]);
+  }, [documents, metaTags]);
 
   // ── Unique categories from documents ───────────────────────────────────────
 
@@ -1485,6 +1797,8 @@ export function KnowledgeBasePage() {
           onUpdated={handleDocUpdated}
           onDeleted={handleDocDeleted}
           isApiMode={isApiMode}
+          availableTags={availableTags}
+          categoryTags={categoryTags}
         />
       )}
 
@@ -1493,6 +1807,9 @@ export function KnowledgeBasePage() {
           onClose={() => setShowCreateModal(false)}
           onCreated={handleDocCreated}
           isApiMode={isApiMode}
+          availableTags={availableTags}
+          categoryTags={categoryTags}
+          categoryOptions={availableCategories}
         />
       )}
 

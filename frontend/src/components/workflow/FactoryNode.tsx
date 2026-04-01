@@ -2,6 +2,9 @@ import { memo, useContext, createContext, useState, useEffect } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { AINode } from '../../types';
 import { factoryApi } from '../../services/api';
+import { NodeOutputPill } from './NodeOutputPill';
+import { ExecutionStatusBadge } from './ExecutionStatusBadge';
+import { nodeRegistry } from '../../nodes/registry';
 
 // Context to pass AI nodes data
 export const AINodesContext = createContext<AINode[]>([]);
@@ -26,6 +29,17 @@ function FactoryNodeInner({ data, selected, id }: { data: FactoryNodeData; selec
   const connectionDrag = useContext(ConnectionDragContext);
   const aiNode = aiNodes.find(n => n.id === (data.aiNodeId || data.nodeId));
 
+  const execStatus = data._executionStatus as string | undefined;
+  const execOutput = data._executionOutput;
+  const execError = data._executionError as string | undefined;
+  const execBorder = execStatus === 'running'
+    ? 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+    : execStatus === 'completed'
+      ? 'border-green-500 shadow-[0_0_12px_rgba(34,197,94,0.3)]'
+      : execStatus === 'failed'
+        ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+        : '';
+
   const [queueCount, setQueueCount] = useState({ pending: 0, processing: 0, total: 0 });
 
   useEffect(() => {
@@ -43,7 +57,55 @@ function FactoryNodeInner({ data, selected, id }: { data: FactoryNodeData; selec
     return () => { mounted = false; clearInterval(interval); };
   }, [id]);
 
+  // Check if this node is an invalid drop target during connection drag
+  const isInvalidTarget = connectionDrag?.invalidTargetIds.has(id) ?? false;
+
   if (!aiNode) {
+    // Check if this is a registered system node (non-AI)
+    const regDef = nodeRegistry.get(data.definitionType || data.nodeId);
+    if (regDef?.palette) {
+      const pal = regDef.palette;
+      const outputFields = regDef.staticOutputFields || [];
+      return (
+        <div
+          className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : execBorder ? `${pal.bg || 'from-slate-700 to-slate-800'} ${execBorder}` : `${pal.bg || 'from-slate-700 to-slate-800'} ${pal.border || 'border-slate-500'}`} border-2 rounded-xl shadow-2xl min-w-[220px] max-w-[280px] transition-all ${
+            selected ? 'ring-2 ring-blue-400 ring-offset-2 ring-offset-gray-900 scale-105' : ''
+          }${isInvalidTarget && !execStatus ? ' animate-pulse' : ''}`}
+        >
+          <Handle type="target" position={Position.Left} id="input" style={{ background: '#334155', border: '3px solid #94a3b8', width: 16, height: 16, top: '50%' }} title="입력" />
+          <div className="px-4 py-3 border-b border-white/10 rounded-t-xl">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-black/30 flex items-center justify-center text-xl">
+                {pal.icon || '⚙️'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className={`text-xs ${pal.textColor || 'text-slate-300'} font-medium uppercase tracking-wider`}>{pal.label || data.nodeId}</div>
+                <div className="text-white font-semibold text-sm truncate">{data.instanceName}</div>
+              </div>
+              <ExecutionStatusBadge status={execStatus} />
+            </div>
+          </div>
+          <div className="px-4 py-3 space-y-2">
+            {outputFields.length > 0 && (
+              <div>
+                <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-1">출력</div>
+                <div className="text-xs text-slate-300">
+                  {outputFields.slice(0, 3).map((f: any) => f.name || f).join(', ')}
+                  {outputFields.length > 3 && ` +${outputFields.length - 3}`}
+                </div>
+              </div>
+            )}
+            <div className={`text-[10px] ${pal.descColor || 'text-slate-500'}`}>
+              {pal.description || '시스템 노드'}
+            </div>
+          </div>
+          <NodeOutputPill status={execStatus} output={execOutput} error={execError} />
+          <Handle type="source" position={Position.Right} id="output" style={{ background: '#334155', border: '3px solid #94a3b8', width: 16, height: 16, top: '50%' }} title="출력" />
+        </div>
+      );
+    }
+
+    // Truly unknown node - show error
     return (
       <div className="bg-red-900/80 border-2 border-red-500 rounded-xl p-4 min-w-[200px]">
         <Handle type="target" position={Position.Left} id="input" style={{ background: '#ef4444', border: '2px solid #f87171', width: 14, height: 14, top: '50%' }} />
@@ -57,14 +119,11 @@ function FactoryNodeInner({ data, selected, id }: { data: FactoryNodeData; selec
   const outputFields = Object.keys(aiNode.outputSchema?.properties ?? {});
   const hasAllInputs = inputFields.length === 0 || Object.keys(data.inputMapping || {}).length >= inputFields.length;
 
-  // Check if this node is an invalid drop target during connection drag
-  const isInvalidTarget = connectionDrag?.invalidTargetIds.has(id) ?? false;
-
   return (
     <div
-      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : 'from-slate-700 to-slate-800 border-slate-500'} border-2 rounded-xl shadow-2xl min-w-[220px] max-w-[280px] transition-all ${
+      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : execBorder ? `from-slate-700 to-slate-800 ${execBorder}` : 'from-slate-700 to-slate-800 border-slate-500'} border-2 rounded-xl shadow-2xl min-w-[220px] max-w-[280px] transition-all ${
         selected ? 'ring-2 ring-blue-400 ring-offset-2 ring-offset-gray-900 scale-105' : ''
-      }${isInvalidTarget ? ' animate-pulse' : ''}`}
+      }${isInvalidTarget && !execStatus ? ' animate-pulse' : ''}`}
     >
       {/* Input Handle */}
       <Handle
@@ -91,6 +150,7 @@ function FactoryNodeInner({ data, selected, id }: { data: FactoryNodeData; selec
             <div className="text-xs text-blue-300/80 font-medium uppercase tracking-wider">공장</div>
             <div className="text-white font-semibold text-sm truncate">{data.instanceName}</div>
           </div>
+          <ExecutionStatusBadge status={execStatus} />
         </div>
       </div>
 
@@ -165,6 +225,9 @@ function FactoryNodeInner({ data, selected, id }: { data: FactoryNodeData; selec
           </span>
         </div>
       </div>
+
+      {/* Execution output pill */}
+      <NodeOutputPill status={execStatus} output={execOutput} error={execError} />
 
       {/* Decorative smoke */}
       <div className="absolute -top-2 right-2 text-slate-400/15 text-3xl pointer-events-none">🏭</div>

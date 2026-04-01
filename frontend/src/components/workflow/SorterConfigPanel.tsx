@@ -2,17 +2,26 @@ import { useState, useEffect, useCallback } from 'react';
 import { factoryApi } from '../../services/api';
 import type { SorterRule, WarehouseEntry } from '../../types';
 
+interface DedupConfig {
+  enabled: boolean;
+  warehouseNodeId: string;
+  matchField: string;
+}
+
 interface SorterConfigPanelProps {
   nodeId: string;
   nodeName: string;
   rules: SorterRule[];
+  config: Record<string, any>;
+  allNodes?: Array<{ id: string; data: Record<string, any> }>;
   handleTargets: Record<string, string>;  // handleId -> targetNodeName
   onUpdateName: (name: string) => void;
   onUpdateRules: (rules: SorterRule[]) => void;
+  onUpdateConfig: (config: Record<string, any>) => void;
   onClose: () => void;
 }
 
-type Tab = 'rules' | 'warehouse';
+type Tab = 'rules' | 'dedup' | 'warehouse';
 
 const OPERATOR_LABELS: Record<string, string> = {
   equals: '같음 (==)',
@@ -35,9 +44,12 @@ export function SorterConfigPanel({
   nodeId,
   nodeName,
   rules,
+  config,
+  allNodes,
   handleTargets,
   onUpdateName,
   onUpdateRules,
+  onUpdateConfig,
   onClose,
 }: SorterConfigPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>('rules');
@@ -106,9 +118,22 @@ export function SorterConfigPanel({
     onUpdateRules(updated);
   };
 
+  // Warehouse nodes for dedup picker (type=result)
+  const warehouseNodes = (allNodes || []).filter(
+    (n) => n.data.definitionType === 'result' && n.id !== nodeId
+  );
+
+  const dedup: DedupConfig = config?.dedup || { enabled: false, warehouseNodeId: '', matchField: '' };
+
+  const handleUpdateDedup = (patch: Partial<DedupConfig>) => {
+    const updated = { ...dedup, ...patch };
+    onUpdateConfig({ ...config, dedup: updated });
+  };
+
   const tabs: { key: Tab; label: string; icon: string }[] = [
     { key: 'rules', label: '규칙', icon: '⚙️' },
-    { key: 'warehouse', label: '창고', icon: '📦' },
+    { key: 'dedup', label: '중복 필터', icon: '🔍' },
+    { key: 'warehouse', label: '처리 이력', icon: '📋' },
   ];
 
   return (
@@ -367,12 +392,103 @@ export function SorterConfigPanel({
           </div>
         )}
 
+        {/* ── Dedup Tab ──────────────────────────────────────────────────── */}
+        {activeTab === 'dedup' && (
+          <div className="p-4 space-y-4">
+            <div className="bg-gray-900/60 rounded-lg border border-gray-700/50 p-3 space-y-1">
+              <div className="text-xs text-gray-300 font-medium">중복 필터란?</div>
+              <div className="text-[10px] text-gray-500 leading-relaxed">
+                특정 창고 노드에 이미 저장된 데이터와 비교하여, 지정한 필드값이 일치하면 해당 데이터를 <strong className="text-amber-400">중복(스킵)</strong> 핸들로 보냅니다.
+                예: 답변 보관함의 board_id와 겹치면 이미 처리된 문의글이므로 건너뜁니다.
+              </div>
+            </div>
+
+            {/* Toggle */}
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-gray-300">중복 필터 활성화</label>
+              <button
+                onClick={() => handleUpdateDedup({ enabled: !dedup.enabled })}
+                className={`relative w-10 h-5 rounded-full transition-colors ${
+                  dedup.enabled ? 'bg-amber-600' : 'bg-gray-600'
+                }`}
+              >
+                <div
+                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                    dedup.enabled ? 'translate-x-5' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {dedup.enabled && (
+              <>
+                {/* Warehouse node picker */}
+                <div>
+                  <label className="block text-[10px] text-gray-400 mb-1 uppercase tracking-wide">
+                    비교 대상 창고
+                  </label>
+                  {warehouseNodes.length === 0 ? (
+                    <div className="text-[10px] text-red-400/80 bg-red-900/20 rounded px-3 py-2">
+                      캔버스에 창고 노드가 없습니다. 먼저 창고 노드를 추가하세요.
+                    </div>
+                  ) : (
+                    <select
+                      value={dedup.warehouseNodeId}
+                      onChange={(e) => handleUpdateDedup({ warehouseNodeId: e.target.value })}
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    >
+                      <option value="">창고 선택...</option>
+                      {warehouseNodes.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          📦 {(n.data.instanceName as string) || n.id}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Match field */}
+                <div>
+                  <label className="block text-[10px] text-gray-400 mb-1 uppercase tracking-wide">
+                    비교 필드명
+                  </label>
+                  <input
+                    type="text"
+                    value={dedup.matchField}
+                    onChange={(e) => handleUpdateDedup({ matchField: e.target.value })}
+                    placeholder="예: board_id"
+                    className="w-full bg-gray-800 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                  <p className="text-[10px] text-gray-600 mt-1">
+                    입력 데이터와 창고 데이터 모두에 존재하는 필드명을 입력하세요.
+                    중첩 경로(예: data.id)도 가능합니다.
+                  </p>
+                </div>
+
+                {/* Status summary */}
+                {dedup.warehouseNodeId && dedup.matchField && (
+                  <div className="bg-amber-900/20 border border-amber-700/30 rounded-lg p-3 space-y-1">
+                    <div className="text-[10px] text-amber-300 font-medium">설정 완료</div>
+                    <div className="text-[10px] text-amber-200/70">
+                      입력 데이터의 <span className="font-mono text-amber-300">{dedup.matchField}</span> 값이
+                      선택한 창고에 이미 존재하면 → <strong>중복 핸들</strong>로 라우팅됩니다.
+                    </div>
+                    <div className="text-[10px] text-gray-500 mt-1">
+                      중복 핸들에 연결된 노드가 없으면 해당 데이터는 단순히 버려집니다.
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {/* ── Warehouse Tab ──────────────────────────────────────────────── */}
         {activeTab === 'warehouse' && (
           <div className="flex flex-col h-full">
             {/* Sub-header */}
             <div className="px-4 py-2 border-b border-gray-700/50 flex items-center justify-between">
-              <span className="text-gray-400 text-xs">{warehouseTotal}개 데이터 보관중</span>
+              <span className="text-gray-400 text-xs">{warehouseTotal}개 처리 이력</span>
               <button
                 onClick={fetchWarehouse}
                 className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
@@ -389,9 +505,9 @@ export function SorterConfigPanel({
               ) : warehouseEntries.length === 0 ? (
                 <div className="text-center py-10">
                   <div className="text-3xl mb-2">📭</div>
-                  <p className="text-gray-500 text-sm">아직 데이터가 없습니다</p>
+                  <p className="text-gray-500 text-sm">아직 처리 이력이 없습니다</p>
                   <p className="text-gray-600 text-xs mt-1">
-                    정렬기를 실행하면 결과가 여기에 쌓입니다
+                    분류기를 실행하면 통과한 데이터 이력이 쌓입니다
                   </p>
                 </div>
               ) : (

@@ -13,34 +13,64 @@ import { FactoryToolbar } from '../components/workflow/FactoryToolbar';
 import { NodeDetailPanel } from '../components/workflow/NodeDetailPanel';
 import { WarehousePanel } from '../components/workflow/WarehousePanel';
 import { FactoryQueuePanel } from '../components/workflow/FactoryQueuePanel';
-import { SorterConfigPanel } from '../components/workflow/SorterConfigPanel';
-import { ApiCallConfigPanel } from '../components/workflow/ApiCallConfigPanel';
-import { UnpackerConfigPanel } from '../components/workflow/UnpackerConfigPanel';
-import { FormStartConfigPanel } from '../components/workflow/FormStartConfigPanel';
-import { ApiStartConfigPanel } from '../components/workflow/ApiStartConfigPanel';
-import { KnowledgeConfigPanel } from '../components/workflow/KnowledgeConfigPanel';
 import { EdgeMappingPanel } from '../components/workflow/EdgeMappingPanel';
 import { ExecutionPanel } from '../components/workflow/ExecutionPanel';
 import { TriggerConfigModal } from '../components/workflow/TriggerConfigModal';
 import { ResultViewModal } from '../components/workflow/ResultViewModal';
 import { MarkdownViewerModal } from '../components/workflow/MarkdownViewerModal';
 
+import { nodeRegistry } from '../nodes/registry';
+
 import type { Edge } from '@xyflow/react';
 import type { AINode, SorterRule } from '../types';
 import { DEF_TYPE, TRIGGER_TYPES } from '../constants/workflow';
+
+/* ------------------------------------------------------------------ */
+/*  RightPanel union type                                              */
+/* ------------------------------------------------------------------ */
 
 type RightPanel =
   | { type: 'none' }
   | { type: 'edgeMapping'; edgeId: string; sourceNodeId: string; targetNodeId: string; sourceNodeName: string; targetNodeName: string }
   | { type: 'nodeDetail'; nodeId: string; aiNode: AINode; instanceName: string; inputMapping: Record<string, string> }
   | { type: 'warehouse'; nodeId: string; nodeName: string }
-  | { type: 'sorter'; nodeId: string; nodeName: string; rules: SorterRule[]; handleTargets: Record<string, string> }
   | { type: 'factoryQueue'; nodeId: string; nodeName: string }
-  | { type: 'apiCallConfig'; nodeId: string; nodeName: string; config: Record<string, any>; inputMapping: Record<string, string> }
-  | { type: 'unpackerConfig'; nodeId: string; nodeName: string; config: Record<string, any>; upstreamFields: { name: string; type: string }[] }
-  | { type: 'formStartConfig'; nodeId: string; nodeName: string; config: Record<string, any> }
-  | { type: 'apiStartConfig'; nodeId: string; nodeName: string; config: Record<string, any> }
-  | { type: 'knowledgeConfig'; nodeId: string; nodeName: string; config: Record<string, any>; upstreamFields: { name: string; type: string }[] };
+  | {
+      type: 'config';
+      nodeId: string;
+      nodeName: string;
+      defType: string;
+      config: Record<string, any>;
+      inputMapping: Record<string, string>;
+      upstreamFields: { name: string; type: string }[];
+    };
+
+/* ------------------------------------------------------------------ */
+/*  Helper: upstream fields 수집                                       */
+/* ------------------------------------------------------------------ */
+
+function collectUpstreamFields(
+  canvasRef: React.RefObject<FactoryCanvasRef | null>,
+  nodeId: string,
+): { name: string; type: string }[] {
+  const fields: { name: string; type: string }[] = [];
+  if (!canvasRef.current) return fields;
+  const state = canvasRef.current.getState();
+  const incomingEdges = state.edges.filter(e => e.target === nodeId);
+  for (const edge of incomingEdges) {
+    const output = canvasRef.current.getOutputFields(edge.source);
+    for (const f of [...output.own, ...output.passthrough]) {
+      if (!fields.some(u => u.name === f.name)) {
+        fields.push(f);
+      }
+    }
+  }
+  return fields;
+}
+
+/* ------------------------------------------------------------------ */
+/*  FactoryPage                                                        */
+/* ------------------------------------------------------------------ */
 
 export function FactoryPage() {
   const { factoryMap, aiNodes, loading, saving, lastSaved, saveMap, scheduleAutoSave } = useFactoryMap();
@@ -63,6 +93,7 @@ export function FactoryPage() {
   const [mdViewerOpen, setMdViewerOpen] = useState(false);
   const [mdViewerNodeId, setMdViewerNodeId] = useState<string | null>(null);
   const [mdViewerNodeName, setMdViewerNodeName] = useState('');
+  const [mdViewerDisplayKey, setMdViewerDisplayKey] = useState<string | undefined>();
 
   // Pipeline selection
   const [pipelineSelectOpen, setPipelineSelectOpen] = useState(false);
@@ -121,207 +152,94 @@ export function FactoryPage() {
     setTriggerModalOpen(true);
   }, []);
 
-  // Node click handler
+  /* ---------------------------------------------------------------- */
+  /*  Node click handler -- registry-based routing                     */
+  /* ---------------------------------------------------------------- */
+
   const handleNodeClick = useCallback((node: Node) => {
     const data = node.data as Record<string, unknown>;
-    const defType = data.definitionType as string;
+    const defType = (data.definitionType as string) || '';
+    const def = nodeRegistry.get(defType);
+    const behavior = def?.panelBehavior?.onClick || 'none';
 
-    // Sorter node click -> show sorter config panel
-    if (defType === DEF_TYPE.SORTER) {
-      const config = (data.config as { rules?: SorterRule[] }) || { rules: [] };
+    const nodeId = node.id;
+    const nodeName = (data.instanceName as string) || '';
+    const config = (data.config as Record<string, any>) || {};
+    const inputMapping = (data.inputMapping as Record<string, string>) || {};
 
-      // Build handle → target node name map
-      const handleTargets: Record<string, string> = {};
-      if (canvasRef.current) {
-        const state = canvasRef.current.getState();
-        const sorterEdges = state.edges.filter(e => e.source === node.id);
-        for (const edge of sorterEdges) {
-          const targetNode = state.nodes.find(n => n.id === edge.target);
-          if (targetNode && edge.sourceHandle) {
-            handleTargets[edge.sourceHandle] = (targetNode.data.instanceName as string) || edge.target;
-          }
-        }
+    switch (behavior) {
+      case 'config': {
+        const upstreamFields = collectUpstreamFields(canvasRef, nodeId);
+        setRightPanel({
+          type: 'config',
+          nodeId,
+          nodeName,
+          defType,
+          config,
+          inputMapping,
+          upstreamFields,
+        });
+        break;
       }
-
-      setRightPanel({
-        type: 'sorter',
-        nodeId: node.id,
-        nodeName: (data.instanceName as string) || '분류기',
-        rules: config.rules || [],
-        handleTargets,
-      });
-      return;
-    }
-
-    // API Call node click -> show config panel
-    if (defType === DEF_TYPE.API_CALL) {
-      setRightPanel({
-        type: 'apiCallConfig',
-        nodeId: node.id,
-        nodeName: (data.instanceName as string) || 'API 호출기',
-        config: (data.config as Record<string, any>) || {},
-        inputMapping: (data.inputMapping as Record<string, string>) || {},
-      });
-      return;
-    }
-
-    // Unpacker node click -> show config panel with upstream output fields
-    if (defType === DEF_TYPE.UNPACKER) {
-      let upstreamFields: { name: string; type: string }[] = [];
-
-      if (canvasRef.current) {
-        const state = canvasRef.current.getState();
-        const incomingEdges = state.edges.filter(e => e.target === node.id);
-        for (const edge of incomingEdges) {
-          const output = canvasRef.current.getOutputFields(edge.source);
-          for (const f of [...output.own, ...output.passthrough]) {
-            if (!upstreamFields.some(u => u.name === f.name)) {
-              upstreamFields.push(f);
-            }
-          }
+      case 'queue':
+        setRightPanel({ type: 'factoryQueue', nodeId, nodeName });
+        break;
+      case 'warehouse':
+        setRightPanel({ type: 'warehouse', nodeId, nodeName });
+        break;
+      case 'none':
+      default:
+        // Legacy trigger nodes -> show trigger config modal
+        if ([DEF_TYPE.MANUAL, DEF_TYPE.SCHEDULE, DEF_TYPE.WEBHOOK, DEF_TYPE.FORM].includes(defType as any)) {
+          setTriggerNodeData(node);
+          setTriggerModalOpen(true);
         }
-      }
-
-      setRightPanel({
-        type: 'unpackerConfig',
-        nodeId: node.id,
-        nodeName: (data.instanceName as string) || '언패커',
-        config: (data.config as Record<string, any>) || {},
-        upstreamFields,
-      });
-      return;
-    }
-
-    // Markdown viewer node click -> open markdown viewer modal directly
-    if (defType === DEF_TYPE.MARKDOWN_VIEWER) {
-      setMdViewerNodeName((data.instanceName as string) || '마크다운 뷰어');
-      setMdViewerNodeId(node.id);
-      setMdViewerOpen(true);
-      return;
-    }
-
-    // Warehouse node click -> show warehouse panel
-    if (defType === DEF_TYPE.RESULT) {
-      setRightPanel({
-        type: 'warehouse',
-        nodeId: node.id,
-        nodeName: (data.instanceName as string) || '창고',
-      });
-      return;
-    }
-
-    // Form start node click -> show form start config panel
-    if (defType === DEF_TYPE.FORM_START) {
-      setRightPanel({
-        type: 'formStartConfig',
-        nodeId: node.id,
-        nodeName: (data.instanceName as string) || '폼 입력 시작',
-        config: (data.config as Record<string, any>) || {},
-      });
-      return;
-    }
-
-    // API start node click -> show api start config panel
-    if (defType === DEF_TYPE.API_START) {
-      setRightPanel({
-        type: 'apiStartConfig',
-        nodeId: node.id,
-        nodeName: (data.instanceName as string) || 'API 호출 시작',
-        config: (data.config as Record<string, any>) || {},
-      });
-      return;
-    }
-
-    // Knowledge node click -> show knowledge config panel with upstream fields
-    if (defType === DEF_TYPE.KNOWLEDGE) {
-      let upstreamFields: { name: string; type: string }[] = [];
-
-      if (canvasRef.current) {
-        const state = canvasRef.current.getState();
-        const incomingEdges = state.edges.filter(e => e.target === node.id);
-        for (const edge of incomingEdges) {
-          const output = canvasRef.current.getOutputFields(edge.source);
-          for (const f of [...output.own, ...output.passthrough]) {
-            if (!upstreamFields.some(u => u.name === f.name)) {
-              upstreamFields.push(f);
-            }
-          }
-        }
-      }
-
-      setRightPanel({
-        type: 'knowledgeConfig',
-        nodeId: node.id,
-        nodeName: (data.instanceName as string) || '지식 검색',
-        config: (data.config as Record<string, any>) || {},
-        upstreamFields,
-      });
-      return;
-    }
-
-    // Legacy trigger node click -> show trigger config modal
-    if ([DEF_TYPE.MANUAL, DEF_TYPE.SCHEDULE, DEF_TYPE.WEBHOOK, DEF_TYPE.FORM].includes(defType as any)) {
-      setTriggerNodeData(node);
-      setTriggerModalOpen(true);
-      return;
-    }
-
-    // Factory (AI) node click -> show queue panel
-    if (defType === DEF_TYPE.AI_CUSTOM) {
-      setRightPanel({
-        type: 'factoryQueue',
-        nodeId: node.id,
-        nodeName: (data.instanceName as string) || '공장',
-      });
-      return;
+        break;
     }
   }, []);
 
-  // Node double-click handler -> show detail panel for factory nodes
+  /* ---------------------------------------------------------------- */
+  /*  Node double-click handler -- registry-based routing              */
+  /* ---------------------------------------------------------------- */
+
   const handleNodeDoubleClick = useCallback((node: Node) => {
     const data = node.data as Record<string, unknown>;
-    const defType = data.definitionType as string;
+    const defType = (data.definitionType as string) || '';
+    const def = nodeRegistry.get(defType);
+    const behavior = def?.panelBehavior?.onDoubleClick;
 
-    if (defType === DEF_TYPE.AI_CUSTOM) {
-      const aiNodeId = (data.aiNodeId as string) || (data.nodeId as string);
-      const aiNode = aiNodes.find(n => n.id === aiNodeId);
-      if (aiNode) {
-        setRightPanel({
-          type: 'nodeDetail',
-          nodeId: node.id,
-          aiNode,
-          instanceName: (data.instanceName as string) || aiNode.name,
-          inputMapping: (data.inputMapping as Record<string, string>) || {},
-        });
+    const nodeName = (data.instanceName as string) || '';
+
+    switch (behavior) {
+      case 'detail': {
+        // AI node -> show detail panel
+        const aiNodeId = (data.aiNodeId as string) || (data.nodeId as string);
+        const aiNode = aiNodes.find(n => n.id === aiNodeId);
+        if (aiNode) {
+          setRightPanel({
+            type: 'nodeDetail',
+            nodeId: node.id,
+            aiNode,
+            instanceName: nodeName || aiNode.name,
+            inputMapping: (data.inputMapping as Record<string, string>) || {},
+          });
+        }
+        break;
       }
-    }
-
-    // Sorter double-click -> show warehouse data modal
-    if (defType === DEF_TYPE.SORTER) {
-      setResultNodeName((data.instanceName as string) || '분류기');
-      setResultNodeId(node.id);
-      setResultModalOpen(true);
-    }
-
-    // API Call double-click -> show result modal (API execution results stored in warehouse)
-    if (defType === DEF_TYPE.API_CALL) {
-      setResultNodeName((data.instanceName as string) || 'API 호출기');
-      setResultNodeId(node.id);
-      setResultModalOpen(true);
-    }
-
-    // Warehouse double-click -> show result modal for viewing past executions
-    if (defType === DEF_TYPE.RESULT) {
-      setResultNodeName((data.instanceName as string) || '창고');
-      setResultNodeId(node.id);
-      setResultModalOpen(true);
-    }
-
-    // Markdown viewer double-click -> same as single click (open viewer)
-    if (defType === DEF_TYPE.MARKDOWN_VIEWER) {
-      setMdViewerNodeName((data.instanceName as string) || '마크다운 뷰어');
-      setMdViewerNodeId(node.id);
-      setMdViewerOpen(true);
+      case 'result-modal':
+        setResultNodeName(nodeName);
+        setResultNodeId(node.id);
+        setResultModalOpen(true);
+        break;
+      case 'markdown-modal':
+        setMdViewerNodeName(nodeName || '\uB9C8\uD06C\uB2E4\uC6B4 \uBDF0\uC5B4');
+        setMdViewerNodeId(node.id);
+        setMdViewerDisplayKey((data.config as any)?.displayKey || undefined);
+        setMdViewerOpen(true);
+        break;
+      case 'none':
+      default:
+        break;
     }
   }, [aiNodes]);
 
@@ -350,7 +268,7 @@ export function FactoryPage() {
       <div className="h-full flex items-center justify-center bg-gray-900">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 border-4 border-gray-600 border-t-amber-500 rounded-full animate-spin" />
-          <span className="text-gray-400 text-sm">공장 맵 로딩 중...</span>
+          <span className="text-gray-400 text-sm">{'\uACF5\uC7A5 \uB9F5 \uB85C\uB529 \uC911...'}</span>
         </div>
       </div>
     );
@@ -361,9 +279,9 @@ export function FactoryPage() {
     return (
       <div className="h-full flex items-center justify-center bg-gray-900">
         <div className="text-center">
-          <div className="text-4xl mb-3">🏭</div>
-          <h2 className="text-white text-xl font-bold mb-2">공장 맵 초기화 중</h2>
-          <p className="text-gray-400 text-sm">백엔드 연결을 확인하세요</p>
+          <div className="text-4xl mb-3">{'\uD83C\uDFED'}</div>
+          <h2 className="text-white text-xl font-bold mb-2">{'\uACF5\uC7A5 \uB9F5 \uCD08\uAE30\uD654 \uC911'}</h2>
+          <p className="text-gray-400 text-sm">{'\uBC31\uC5D4\uB4DC \uC5F0\uACB0\uC744 \uD655\uC778\uD558\uC138\uC694'}</p>
         </div>
       </div>
     );
@@ -393,6 +311,7 @@ export function FactoryPage() {
               ref={canvasRef}
               workflow={factoryMap}
               aiNodes={aiNodes}
+              nodeProgress={nodeProgress}
               onNodesChange={handleCanvasChange}
               onNodeClick={handleNodeClick}
               onNodeDoubleClick={handleNodeDoubleClick}
@@ -440,7 +359,6 @@ export function FactoryPage() {
                 handleCanvasChange();
               }}
               onDelete={() => {
-                // TODO: Delete node from canvas
                 setRightPanel({ type: 'none' });
               }}
               onClose={() => setRightPanel({ type: 'none' })}
@@ -472,190 +390,84 @@ export function FactoryPage() {
             />
           )}
 
-          {rightPanel.type === 'sorter' && (
-            <SorterConfigPanel
-              nodeId={rightPanel.nodeId}
-              nodeName={rightPanel.nodeName}
-              rules={rightPanel.rules}
-              handleTargets={rightPanel.handleTargets}
-              onUpdateName={(name) => {
-                if (canvasRef.current && rightPanel.type === 'sorter') {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { instanceName: name } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'sorter' ? { ...prev, nodeName: name } : prev
-                );
-                handleCanvasChange();
-              }}
-              onUpdateRules={(rules) => {
-                if (canvasRef.current && rightPanel.type === 'sorter') {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { config: { rules } } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'sorter' ? { ...prev, rules } : prev
-                );
-                handleCanvasChange();
-              }}
-              onClose={() => setRightPanel({ type: 'none' })}
-            />
-          )}
+          {/* Unified config panel -- registry-based */}
+          {rightPanel.type === 'config' && (() => {
+            const def = nodeRegistry.get(rightPanel.defType);
+            if (!def?.configPanel) return null;
+            const Panel = def.configPanel;
 
-          {rightPanel.type === 'apiCallConfig' && (
-            <ApiCallConfigPanel
-              nodeId={rightPanel.nodeId}
-              nodeName={rightPanel.nodeName}
-              config={rightPanel.config}
-              inputMapping={rightPanel.inputMapping}
-              onUpdateName={(name) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { instanceName: name } as any);
+            // Sorter: handleTargets 계산
+            let handleTargets: Record<string, string> = {};
+            if (rightPanel.defType === DEF_TYPE.SORTER && canvasRef.current) {
+              const state = canvasRef.current.getState();
+              const outEdges = state.edges.filter(e => e.source === rightPanel.nodeId);
+              for (const e of outEdges) {
+                const tgtNode = state.nodes.find(n => n.id === e.target);
+                if (e.sourceHandle) {
+                  handleTargets[e.sourceHandle] = (tgtNode?.data.instanceName as string) || e.target;
                 }
-                setRightPanel(prev =>
-                  prev.type === 'apiCallConfig' ? { ...prev, nodeName: name } : prev
-                );
-                handleCanvasChange();
-              }}
-              onUpdateConfig={(config) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { config } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'apiCallConfig' ? { ...prev, config } : prev
-                );
-                handleCanvasChange();
-              }}
-              onDelete={() => {
-                setRightPanel({ type: 'none' });
-              }}
-              onClose={() => setRightPanel({ type: 'none' })}
-            />
-          )}
+              }
+            }
 
-          {rightPanel.type === 'unpackerConfig' && (
-            <UnpackerConfigPanel
-              nodeId={rightPanel.nodeId}
-              nodeName={rightPanel.nodeName}
-              config={rightPanel.config}
-              upstreamFields={rightPanel.upstreamFields}
-              onUpdateName={(name) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { instanceName: name } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'unpackerConfig' ? { ...prev, nodeName: name } : prev
-                );
-                handleCanvasChange();
-              }}
-              onUpdateConfig={(config) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { config } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'unpackerConfig' ? { ...prev, config } : prev
-                );
-                handleCanvasChange();
-              }}
-              onDelete={() => {
-                setRightPanel({ type: 'none' });
-              }}
-              onClose={() => setRightPanel({ type: 'none' })}
-            />
-          )}
+            // Starter 노드: onExecute 콜백
+            const isStarter = TRIGGER_TYPES.has(rightPanel.defType);
 
-          {rightPanel.type === 'formStartConfig' && (
-            <FormStartConfigPanel
-              nodeId={rightPanel.nodeId}
-              nodeName={rightPanel.nodeName}
-              config={rightPanel.config}
-              onUpdateName={(name) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { instanceName: name } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'formStartConfig' ? { ...prev, nodeName: name } : prev
-                );
-                handleCanvasChange();
-              }}
-              onUpdateConfig={(config) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { config } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'formStartConfig' ? { ...prev, config } : prev
-                );
-                handleCanvasChange();
-              }}
-              onExecute={(inputData) => execute(inputData, rightPanel.nodeId)}
-              executing={executing}
-              onDelete={() => {
-                setRightPanel({ type: 'none' });
-              }}
-              onClose={() => setRightPanel({ type: 'none' })}
-            />
-          )}
-
-          {rightPanel.type === 'apiStartConfig' && (
-            <ApiStartConfigPanel
-              nodeId={rightPanel.nodeId}
-              nodeName={rightPanel.nodeName}
-              config={rightPanel.config}
-              onUpdateName={(name) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { instanceName: name } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'apiStartConfig' ? { ...prev, nodeName: name } : prev
-                );
-                handleCanvasChange();
-              }}
-              onUpdateConfig={(config) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { config } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'apiStartConfig' ? { ...prev, config } : prev
-                );
-                handleCanvasChange();
-              }}
-              onExecute={() => execute({})}
-              executing={executing}
-              onDelete={() => {
-                setRightPanel({ type: 'none' });
-              }}
-              onClose={() => setRightPanel({ type: 'none' })}
-            />
-          )}
-
-          {rightPanel.type === 'knowledgeConfig' && (
-            <KnowledgeConfigPanel
-              nodeId={rightPanel.nodeId}
-              nodeName={rightPanel.nodeName}
-              config={rightPanel.config}
-              upstreamFields={rightPanel.upstreamFields}
-              onUpdateName={(name) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { instanceName: name } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'knowledgeConfig' ? { ...prev, nodeName: name } : prev
-                );
-                handleCanvasChange();
-              }}
-              onUpdateConfig={(config) => {
-                if (canvasRef.current) {
-                  canvasRef.current.updateNodeData(rightPanel.nodeId, { config } as any);
-                }
-                setRightPanel(prev =>
-                  prev.type === 'knowledgeConfig' ? { ...prev, config } : prev
-                );
-                handleCanvasChange();
-              }}
-              onDelete={() => {
-                setRightPanel({ type: 'none' });
-              }}
-              onClose={() => setRightPanel({ type: 'none' })}
-            />
-          )}
+            return (
+              <Panel
+                nodeId={rightPanel.nodeId}
+                nodeName={rightPanel.nodeName}
+                config={rightPanel.config}
+                allNodes={canvasRef.current?.getState().nodes || []}
+                edges={canvasRef.current?.getState().edges || []}
+                aiNodes={aiNodes}
+                inputMapping={rightPanel.inputMapping}
+                upstreamFields={rightPanel.upstreamFields}
+                // Sorter 전용
+                rules={rightPanel.config.rules || []}
+                handleTargets={handleTargets}
+                onUpdateName={(name: string) => {
+                  if (canvasRef.current) {
+                    canvasRef.current.updateNodeData(rightPanel.nodeId, { instanceName: name } as any);
+                  }
+                  setRightPanel(prev =>
+                    prev.type === 'config' ? { ...prev, nodeName: name } : prev
+                  );
+                  handleCanvasChange();
+                }}
+                onUpdateConfig={(config: Record<string, any>) => {
+                  if (canvasRef.current) {
+                    canvasRef.current.updateNodeData(rightPanel.nodeId, { config } as any);
+                  }
+                  setRightPanel(prev =>
+                    prev.type === 'config' ? { ...prev, config } : prev
+                  );
+                  handleCanvasChange();
+                }}
+                onUpdateRules={(rules: SorterRule[]) => {
+                  if (canvasRef.current) {
+                    canvasRef.current.updateNodeData(rightPanel.nodeId, { config: { ...rightPanel.config, rules } } as any);
+                  }
+                  setRightPanel(prev =>
+                    prev.type === 'config' ? { ...prev, config: { ...prev.config, rules } } : prev
+                  );
+                  handleCanvasChange();
+                }}
+                onDelete={() => {
+                  setRightPanel({ type: 'none' });
+                }}
+                onClose={() => setRightPanel({ type: 'none' })}
+                onExecute={isStarter
+                  ? (inputData?: Record<string, unknown>) => {
+                      // onClick={onExecute}로 호출 시 React 이벤트 객체가 전달될 수 있으므로 필터링
+                      const data = (inputData && typeof inputData === 'object' && !('nativeEvent' in inputData))
+                        ? inputData : {};
+                      execute(data, rightPanel.nodeId);
+                    }
+                  : undefined}
+                executing={isStarter ? executing : undefined}
+              />
+            );
+          })()}
         </div>
 
         {/* Bottom: Execution panel */}
@@ -711,6 +523,7 @@ export function FactoryPage() {
             resultNodeName={mdViewerNodeName}
             onReExecute={() => execute({})}
             onClose={() => setMdViewerOpen(false)}
+            displayKey={mdViewerDisplayKey}
           />
         )}
 
@@ -722,8 +535,8 @@ export function FactoryPage() {
           >
             <div className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl w-full max-w-sm mx-4">
               <div className="px-5 py-4 border-b border-gray-700">
-                <h2 className="text-lg font-semibold text-white">파이프라인 선택</h2>
-                <p className="text-xs text-gray-500 mt-1">실행할 파이프라인을 선택하세요</p>
+                <h2 className="text-lg font-semibold text-white">{'\uD30C\uC774\uD504\uB77C\uC778 \uC120\uD0DD'}</h2>
+                <p className="text-xs text-gray-500 mt-1">{'\uC2E4\uD589\uD560 \uD30C\uC774\uD504\uB77C\uC778\uC744 \uC120\uD0DD\uD558\uC138\uC694'}</p>
               </div>
               <div className="p-4 space-y-2">
                 {triggerNodes.map((node) => (
@@ -752,7 +565,7 @@ export function FactoryPage() {
                   onClick={() => setPipelineSelectOpen(false)}
                   className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm font-medium rounded-lg transition-colors"
                 >
-                  취소
+                  {'\uCDE8\uC18C'}
                 </button>
               </div>
             </div>

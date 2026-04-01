@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { factoryApi } from '../../services/api';
 import type { WarehouseEntry } from '../../types';
+import { WarehouseDataModal } from './WarehouseDataModal';
 
 interface WarehousePanelProps {
   nodeId: string;
@@ -16,6 +17,7 @@ export function WarehousePanel({ nodeId, nodeName, onUpdateName, onClose }: Ware
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [modalEntry, setModalEntry] = useState<WarehouseEntry | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -207,7 +209,13 @@ export function WarehousePanel({ nodeId, nodeName, onUpdateName, onClose }: Ware
               {/* Expanded data */}
               {expandedId === entry.id && (
                 <div className="px-3 pb-3 border-t border-gray-700">
-                  <div className="flex justify-end mb-1">
+                  <div className="flex justify-end gap-2 mb-1">
+                    <button
+                      onClick={() => setModalEntry(entry)}
+                      className="text-[10px] text-emerald-500 hover:text-emerald-300 transition-colors"
+                    >
+                      🔍 상세보기
+                    </button>
                     <button
                       onClick={() => copyToClipboard(entry.data)}
                       className="text-[10px] text-gray-500 hover:text-gray-300"
@@ -239,6 +247,12 @@ export function WarehousePanel({ nodeId, nodeName, onUpdateName, onClose }: Ware
           🔄 새로고침
         </button>
       </div>
+
+      {/* Detail Modal */}
+      <WarehouseDataModal
+        entry={modalEntry}
+        onClose={() => setModalEntry(null)}
+      />
     </div>
   );
 }

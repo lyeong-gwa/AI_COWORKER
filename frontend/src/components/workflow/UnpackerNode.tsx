@@ -1,6 +1,8 @@
 import { memo, useContext } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { ConnectionDragContext } from './FactoryNode';
+import { NodeOutputPill } from './NodeOutputPill';
+import { ExecutionStatusBadge } from './ExecutionStatusBadge';
 
 export interface UnpackerNodeData extends Record<string, unknown> {
   nodeId: string;
@@ -19,11 +21,22 @@ function UnpackerNodeInner({ data, selected, id }: { data: UnpackerNodeData; sel
   const config = data.config || {};
   const arrayField = config.arrayField || '';
 
+  const execStatus = data._executionStatus as string | undefined;
+  const execOutput = data._executionOutput;
+  const execError = data._executionError as string | undefined;
+  const execBorder = execStatus === 'running'
+    ? 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+    : execStatus === 'completed'
+      ? 'border-green-500 shadow-[0_0_12px_rgba(34,197,94,0.3)]'
+      : execStatus === 'failed'
+        ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+        : '';
+
   return (
     <div
-      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : 'from-rose-700 to-rose-900 border-rose-400'} border-2 rounded-xl shadow-2xl min-w-[200px] max-w-[260px] transition-all ${
+      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : execBorder ? `from-rose-700 to-rose-900 ${execBorder}` : 'from-rose-700 to-rose-900 border-rose-400'} border-2 rounded-xl shadow-2xl min-w-[200px] max-w-[260px] transition-all ${
         selected ? 'ring-2 ring-rose-300 ring-offset-2 ring-offset-gray-900 scale-105' : ''
-      }${isInvalidTarget ? ' animate-pulse' : ''}`}
+      }${isInvalidTarget && !execStatus ? ' animate-pulse' : ''}`}
     >
       {/* Input Handle */}
       <Handle
@@ -50,6 +63,7 @@ function UnpackerNodeInner({ data, selected, id }: { data: UnpackerNodeData; sel
             <div className="text-xs text-rose-300/80 font-medium uppercase tracking-wider">언패커</div>
             <div className="text-white font-semibold text-sm truncate">{data.instanceName}</div>
           </div>
+          <ExecutionStatusBadge status={execStatus} />
         </div>
       </div>
 
@@ -76,6 +90,9 @@ function UnpackerNodeInner({ data, selected, id }: { data: UnpackerNodeData; sel
           </div>
         )}
       </div>
+
+      {/* Execution output pill */}
+      <NodeOutputPill status={execStatus} output={execOutput} error={execError} />
 
       {/* Decorative */}
       <div className="absolute -top-1 -right-1 text-rose-400/15 text-2xl pointer-events-none">📤</div>

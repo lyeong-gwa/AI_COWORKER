@@ -15,42 +15,13 @@ import type { Connection, Node, Edge, EdgeTypes, NodeTypes, Viewport, OnConnectS
 import '@xyflow/react/dist/style.css';
 
 import { ConveyorBeltEdge } from './ConveyorBeltEdge';
-import { FormStartNode } from './FormStartNode';
-import type { FormStartNodeData } from './FormStartNode';
-import { ApiStartNode } from './ApiStartNode';
-import type { ApiStartNodeData } from './ApiStartNode';
-import { FactoryNode, ConnectionDragContext } from './FactoryNode';
-import type { FactoryNodeData } from './FactoryNode';
-import { WarehouseNode } from './WarehouseNode';
-import type { WarehouseNodeData } from './WarehouseNode';
-import { SorterNode } from './SorterNode';
-import type { SorterNodeData } from './SorterNode';
-import { ApiCallNode } from './ApiCallNode';
-import type { ApiCallNodeData } from './ApiCallNode';
-import { UnpackerNode } from './UnpackerNode';
-import type { UnpackerNodeData } from './UnpackerNode';
-import { KnowledgeNode } from './KnowledgeNode';
-import type { KnowledgeNodeData } from './KnowledgeNode';
-import { MarkdownViewerNode } from './MarkdownViewerNode';
-import type { MarkdownViewerNodeData } from './MarkdownViewerNode';
+import { ConnectionDragContext } from './FactoryNode';
+import { nodeRegistry } from '../../nodes';
 import type { AINode, Workflow } from '../../types';
-import { DEF_TYPE, TRIGGER_TYPES, STATIC_OUTPUT_FIELDS, FIELD_MAPPING_PREFIX, EDGE_STYLE } from '../../constants/workflow';
+import { DEF_TYPE, TRIGGER_TYPES, FIELD_MAPPING_PREFIX, EDGE_STYLE } from '../../constants/workflow';
 
-// Union type for all node data
-type AnyNodeData = FormStartNodeData | ApiStartNodeData | FactoryNodeData | WarehouseNodeData | SorterNodeData | ApiCallNodeData | UnpackerNodeData | KnowledgeNodeData | MarkdownViewerNodeData;
-
-// Node types registry
-const nodeTypes: NodeTypes = {
-  formStartNode: FormStartNode,
-  apiStartNode: ApiStartNode,
-  factoryNode: FactoryNode,
-  warehouseNode: WarehouseNode,
-  sorterNode: SorterNode,
-  apiCallNode: ApiCallNode,
-  unpackerNode: UnpackerNode,
-  knowledgeNode: KnowledgeNode,
-  markdownViewerNode: MarkdownViewerNode,
-};
+// Node types from registry
+const nodeTypes: NodeTypes = nodeRegistry.getNodeTypes();
 
 // Conveyor belt edge types
 const edgeTypes: EdgeTypes = {
@@ -65,7 +36,7 @@ const defaultEdgeOptions = {
 };
 
 export interface CanvasState {
-  nodes: Node<AnyNodeData>[];
+  nodes: Node<any>[];
   edges: Edge[];
   viewport: Viewport;
 }
@@ -77,61 +48,60 @@ export interface FieldDef {
 
 export interface FactoryCanvasRef {
   getState: () => CanvasState;
-  updateNodeData: (nodeId: string, dataUpdate: Partial<AnyNodeData>) => void;
+  updateNodeData: (nodeId: string, dataUpdate: Partial<Record<string, unknown>>) => void;
   getOutputFields: (nodeId: string) => { own: FieldDef[]; passthrough: FieldDef[] };
   getInputFields: (nodeId: string) => FieldDef[];
+}
+
+interface NodeProgressEntry {
+  status: string;
+  output?: unknown;
+  error?: string;
+  startTime?: string;
+  endTime?: string;
 }
 
 interface FactoryCanvasProps {
   workflow: Workflow;
   aiNodes: AINode[];
+  nodeProgress?: Record<string, NodeProgressEntry>;
   onNodesChange?: () => void;
-  onNodeClick?: (node: Node<AnyNodeData>) => void;
-  onNodeDoubleClick?: (node: Node<AnyNodeData>) => void;
+  onNodeClick?: (node: Node<any>) => void;
+  onNodeDoubleClick?: (node: Node<any>) => void;
   onEdgeClick?: (edgeId: string, edge: Edge) => void;
 }
 
 // Convert workflow to ReactFlow format
-function workflowToReactFlow(workflow: Workflow): { nodes: Node<AnyNodeData>[]; edges: Edge[] } {
-  const nodes: Node<AnyNodeData>[] = workflow.nodes.map((inst) => {
-    const defType = inst.definitionType;
-    const isFormStart = defType === DEF_TYPE.FORM_START;
-    const isApiStart = defType === DEF_TYPE.API_START;
-    const isResult = defType === DEF_TYPE.RESULT;
-    const isSorter = defType === DEF_TYPE.SORTER;
-    const isApiCall = defType === DEF_TYPE.API_CALL;
-    const isUnpacker = defType === DEF_TYPE.UNPACKER;
-    const isKnowledge = defType === DEF_TYPE.KNOWLEDGE;
-    const isMarkdownViewer = defType === DEF_TYPE.MARKDOWN_VIEWER;
+// Legacy definition type normalization
+const LEGACY_DEF_TYPE_MAP: Record<string, string> = {
+  'form': 'form-start',
+};
 
-    let nodeType = 'factoryNode';
-    if (isFormStart) nodeType = 'formStartNode';
-    else if (isApiStart) nodeType = 'apiStartNode';
-    else if (isResult) nodeType = 'warehouseNode';
-    else if (isSorter) nodeType = 'sorterNode';
-    else if (isApiCall) nodeType = 'apiCallNode';
-    else if (isUnpacker) nodeType = 'unpackerNode';
-    else if (isKnowledge) nodeType = 'knowledgeNode';
-    else if (isMarkdownViewer) nodeType = 'markdownViewerNode';
+function workflowToReactFlow(workflow: Workflow): { nodes: Node<any>[]; edges: Edge[] } {
+  const nodes: Node<any>[] = workflow.nodes.map((inst) => {
+    const defType = LEGACY_DEF_TYPE_MAP[inst.definitionType || ''] || inst.definitionType || '';
+    const def = nodeRegistry.get(defType);
+    const nodeType = def?.reactFlowType || 'factoryNode';
+
+    // 기본 데이터
+    const baseData: any = {
+      nodeId: inst.nodeId,
+      instanceName: inst.name,
+      inputMapping: inst.inputMapping,
+      definitionType: defType,
+      aiNodeId: inst.aiNodeId,
+    };
+
+    // 정의별 추가 데이터 (config 등)
+    if (def?.defaultData) {
+      Object.assign(baseData, def.defaultData(inst));
+    }
 
     return {
       id: inst.id,
       type: nodeType,
       position: inst.position,
-      data: {
-        nodeId: inst.nodeId,
-        instanceName: inst.name,
-        inputMapping: inst.inputMapping,
-        definitionType: inst.definitionType,
-        aiNodeId: inst.aiNodeId,
-        ...(isSorter ? { config: inst.config || { rules: [] } } : {}),
-        ...(isApiCall ? { config: inst.config || {} } : {}),
-        ...(isUnpacker ? { config: inst.config || {} } : {}),
-        ...(isFormStart ? { config: inst.config || {} } : {}),
-        ...(isApiStart ? { config: inst.config || {} } : {}),
-        ...(isKnowledge ? { config: inst.config || {} } : {}),
-        ...(isMarkdownViewer ? { config: inst.config || {} } : {}),
-      },
+      data: baseData,
     };
   });
 
@@ -139,9 +109,8 @@ function workflowToReactFlow(workflow: Workflow): { nodes: Node<AnyNodeData>[]; 
   const nodeDefTypes = new Map(workflow.nodes.map((n) => [n.id, n.definitionType]));
 
   const edges: Edge[] = workflow.connections.map((conn) => {
-    const srcDefType = nodeDefTypes.get(conn.sourceNodeId);
-    // Sorter nodes use "default" handle; all other nodes use "output"
-    const defaultSrcHandle = srcDefType === DEF_TYPE.SORTER ? 'default' : 'output';
+    const srcDefType = nodeDefTypes.get(conn.sourceNodeId) || '';
+    const defaultSrcHandle = nodeRegistry.getDefaultSourceHandle(srcDefType);
     return {
       id: conn.id,
       source: conn.sourceNodeId,
@@ -156,7 +125,7 @@ function workflowToReactFlow(workflow: Workflow): { nodes: Node<AnyNodeData>[]; 
 }
 
 // Convert ReactFlow to save data format
-export function canvasToSaveData(nodes: Node<AnyNodeData>[], edges: Edge[], viewport: Viewport) {
+export function canvasToSaveData(nodes: Node<any>[], edges: Edge[], viewport: Viewport) {
   return {
     viewport: { x: viewport.x, y: viewport.y, zoom: viewport.zoom },
     nodes: nodes.map((n) => ({
@@ -174,14 +143,14 @@ export function canvasToSaveData(nodes: Node<AnyNodeData>[], edges: Edge[], view
       id: e.id,
       sourceNodeId: e.source,
       targetNodeId: e.target,
-      sourceHandle: e.sourceHandle ?? null,
-      targetHandle: e.targetHandle ?? null,
+      sourceHandle: e.sourceHandle ?? undefined,
+      targetHandle: e.targetHandle ?? undefined,
     })),
   };
 }
 
 function FactoryCanvasInner(
-  { workflow, aiNodes, onNodesChange, onNodeClick, onNodeDoubleClick, onEdgeClick }: FactoryCanvasProps,
+  { workflow, aiNodes, nodeProgress, onNodesChange, onNodeClick, onNodeDoubleClick, onEdgeClick }: FactoryCanvasProps,
   ref: React.Ref<FactoryCanvasRef>
 ) {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
@@ -273,8 +242,10 @@ function FactoryCanvasInner(
           ? Object.keys(aiNode.outputSchema.properties)
           : null;
       }
-      if (defType === DEF_TYPE.API_CALL || defType === DEF_TYPE.API_START) {
-        return STATIC_OUTPUT_FIELDS[DEF_TYPE.API_CALL].map((f) => f.name);
+      // 레지스트리의 고정 출력 필드 확인
+      const staticFields = nodeRegistry.getStaticOutputFields(defType as string);
+      if (staticFields) {
+        return staticFields.map(f => f.name);
       }
       if (defType === DEF_TYPE.FORM_START) {
         const aiNodeId = (node.data.aiNodeId || node.data.nodeId) as string;
@@ -282,9 +253,6 @@ function FactoryCanvasInner(
         return aiNode?.inputSchema?.properties
           ? Object.keys(aiNode.inputSchema.properties)
           : null;
-      }
-      if (defType === DEF_TYPE.KNOWLEDGE) {
-        return STATIC_OUTPUT_FIELDS[DEF_TYPE.KNOWLEDGE].map((f) => f.name);
       }
       // result, markdown-viewer, sorter, unpacker, 기타: 제한 없음
       return null;
@@ -405,8 +373,6 @@ function FactoryCanvasInner(
           if (aiN?.outputSchema?.properties) {
             return Object.entries(aiN.outputSchema.properties).map(([k, v]) => ({ name: k, type: v.type }));
           }
-        } else if (dt === DEF_TYPE.API_CALL || dt === DEF_TYPE.API_START) {
-          return [...STATIC_OUTPUT_FIELDS[DEF_TYPE.API_CALL]];
         } else if (dt === DEF_TYPE.FORM_START) {
           const aid = (nd.data.aiNodeId || nd.data.nodeId) as string;
           const aiN = aiNodes.find((a) => a.id === aid);
@@ -434,8 +400,12 @@ function FactoryCanvasInner(
               queue.push(oe.target);
             }
           }
-        } else if (dt === DEF_TYPE.KNOWLEDGE) {
-          return [...STATIC_OUTPUT_FIELDS[DEF_TYPE.KNOWLEDGE]];
+        } else {
+          // 레지스트리의 고정 출력 필드 확인
+          const regStaticFields = nodeRegistry.getStaticOutputFields(dt as string);
+          if (regStaticFields) {
+            return [...regStaticFields];
+          }
         }
         return [];
       }
@@ -595,7 +565,7 @@ function FactoryCanvasInner(
   // Handle node click
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
-      onNodeClick?.(node as Node<AnyNodeData>);
+      onNodeClick?.(node as Node<any>);
     },
     [onNodeClick]
   );
@@ -603,7 +573,7 @@ function FactoryCanvasInner(
   // Handle node double click
   const handleNodeDoubleClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
-      onNodeDoubleClick?.(node as Node<AnyNodeData>);
+      onNodeDoubleClick?.(node as Node<any>);
     },
     [onNodeDoubleClick]
   );
@@ -617,185 +587,35 @@ function FactoryCanvasInner(
   const onDrop = useCallback(
     (event: DragEvent) => {
       event.preventDefault();
+      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
 
-      const position = screenToFlowPosition({
-        x: event.clientX,
-        y: event.clientY,
-      });
-
-      // Check for starter node (form-start / api-start)
-      const starterData = event.dataTransfer.getData('application/starternode');
-      if (starterData) {
-        const { definitionType } = JSON.parse(starterData);
-        const id = genId();
-
-        if (definitionType === DEF_TYPE.FORM_START) {
-          const newNode: Node<FormStartNodeData> = {
-            id,
-            type: 'formStartNode',
-            position,
-            data: {
-              nodeId: DEF_TYPE.FORM_START,
-              instanceName: '폼 입력 시작',
-              definitionType: DEF_TYPE.FORM_START,
-              config: { mode: 'manual' },
-            },
-          };
-          setNodes((nds) => [...nds, newNode]);
-        } else if (definitionType === DEF_TYPE.API_START) {
-          const newNode: Node<ApiStartNodeData> = {
-            id,
-            type: 'apiStartNode',
-            position,
-            data: {
-              nodeId: DEF_TYPE.API_START,
-              instanceName: 'API 호출 시작',
-              definitionType: DEF_TYPE.API_START,
-              config: { mode: 'manual' },
-            },
-          };
-          setNodes((nds) => [...nds, newNode]);
-        }
-
-        onNodesChange?.();
-        return;
-      }
-
-      // Check for system node (warehouse/sorter)
-      const systemData = event.dataTransfer.getData('application/systemnode');
-      if (systemData) {
-        const { type, definitionType } = JSON.parse(systemData);
-        const id = genId();
-
-        if (type === DEF_TYPE.RESULT) {
-          const newNode: Node<WarehouseNodeData> = {
-            id,
-            type: 'warehouseNode',
-            position,
-            data: {
-              nodeId: DEF_TYPE.RESULT,
-              instanceName: '창고',
-              definitionType: DEF_TYPE.RESULT,
-            },
-          };
-          setNodes((nds) => [...nds, newNode]);
-        } else if (type === DEF_TYPE.SORTER) {
-          const newNode: Node<SorterNodeData> = {
-            id,
-            type: 'sorterNode',
-            position,
-            data: {
-              nodeId: DEF_TYPE.SORTER,
-              instanceName: '분류기',
-              definitionType: DEF_TYPE.SORTER,
-              config: { rules: [] },
-            },
-          };
-          setNodes((nds) => [...nds, newNode]);
-        } else if (type === DEF_TYPE.MARKDOWN_VIEWER) {
-          const newNode: Node<MarkdownViewerNodeData> = {
-            id,
-            type: 'markdownViewerNode',
-            position,
-            data: {
-              nodeId: DEF_TYPE.MARKDOWN_VIEWER,
-              instanceName: '마크다운 뷰어',
-              definitionType: DEF_TYPE.MARKDOWN_VIEWER,
-            },
-          };
-          setNodes((nds) => [...nds, newNode]);
-        }
-
-        // Suppress unused var (definitionType is used by sorter/result via type)
-        void definitionType;
-
-        onNodesChange?.();
-        return;
-      }
-
-      // Check for knowledge node
-      const knowledgeData = event.dataTransfer.getData('application/knowledgenode');
-      if (knowledgeData) {
-        const id = genId();
-        const newNode: Node<KnowledgeNodeData> = {
-          id,
-          type: 'knowledgeNode',
-          position,
-          data: {
-            nodeId: DEF_TYPE.KNOWLEDGE,
-            instanceName: '지식 검색',
-            definitionType: DEF_TYPE.KNOWLEDGE,
-            config: { maxResults: 5 },
-            inputMapping: {},
-          },
-        };
-        setNodes((nds) => [...nds, newNode]);
-        onNodesChange?.();
-        return;
-      }
-
-      // Check for api-call node
-      const apiCallData = event.dataTransfer.getData('application/apicallnode');
-      if (apiCallData) {
-        const id = genId();
-        const newNode: Node<ApiCallNodeData> = {
-          id,
-          type: 'apiCallNode',
-          position,
-          data: {
-            nodeId: DEF_TYPE.API_CALL,
-            instanceName: 'API 호출기',
-            definitionType: DEF_TYPE.API_CALL,
-            config: {},
-            inputMapping: {},
-          },
-        };
-        setNodes((nds) => [...nds, newNode]);
-        onNodesChange?.();
-        return;
-      }
-
-      // Check for unpacker node
-      const unpackerData = event.dataTransfer.getData('application/unpackernode');
-      if (unpackerData) {
-        const id = genId();
-        const newNode: Node<UnpackerNodeData> = {
-          id,
-          type: 'unpackerNode',
-          position,
-          data: {
-            nodeId: DEF_TYPE.UNPACKER,
-            instanceName: '언패커',
-            definitionType: DEF_TYPE.UNPACKER,
-            config: {},
-            inputMapping: {},
-          },
-        };
-        setNodes((nds) => [...nds, newNode]);
-        onNodesChange?.();
-        return;
-      }
-
-      // Check for AI node (factory)
+      // 1. AI 노드 (application/ainode)
       const aiNodeData = event.dataTransfer.getData('application/ainode');
       if (aiNodeData) {
-        const aiNode: AINode = JSON.parse(aiNodeData);
-        const id = genId();
+        const aiNode = JSON.parse(aiNodeData);
+        const def = nodeRegistry.get(DEF_TYPE.AI_CUSTOM);
+        if (def) {
+          const newNode = def.createNodeData(genId(), position, { aiNode });
+          setNodes((nds) => [...nds, newNode]);
+          onNodesChange?.();
+        }
+        return;
+      }
 
-        const newNode: Node<FactoryNodeData> = {
-          id,
-          type: 'factoryNode',
-          position,
-          data: {
-            nodeId: aiNode.id,
-            instanceName: aiNode.name,
-            definitionType: DEF_TYPE.AI_CUSTOM,
-            aiNodeId: aiNode.id,
-            inputMapping: {},
-          },
-        };
+      // 2. 시스템/스타터 노드 -- 모든 dragType을 시도
+      for (const def of nodeRegistry.all()) {
+        if (!def.palette?.dragType) continue;
+        const data = event.dataTransfer.getData(def.palette.dragType);
+        if (!data) continue;
+
+        const parsed = JSON.parse(data);
+        const targetDefType = parsed.type || parsed.definitionType;
+        if (targetDefType !== def.defType) continue;
+
+        const newNode = def.createNodeData(genId(), position);
         setNodes((nds) => [...nds, newNode]);
         onNodesChange?.();
+        return;
       }
     },
     [screenToFlowPosition, setNodes, genId, onNodesChange]
@@ -836,7 +656,7 @@ function FactoryCanvasInner(
 
   // Update node data
   const updateNodeData = useCallback(
-    (nodeId: string, dataUpdate: Partial<AnyNodeData>) => {
+    (nodeId: string, dataUpdate: Partial<Record<string, unknown>>) => {
       setNodes((nds) =>
         nds.map((n) =>
           n.id === nodeId ? { ...n, data: { ...n.data, ...dataUpdate } } : n
@@ -859,25 +679,59 @@ function FactoryCanvasInner(
     getInputFields,
   }));
 
+  // Enrich nodes with execution status from nodeProgress
+  const enrichedNodes = useMemo(() => {
+    if (!nodeProgress || Object.keys(nodeProgress).length === 0) return nodes;
+    return nodes.map((node) => {
+      const progress = nodeProgress[node.id];
+      if (!progress) return node;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          _executionStatus: progress.status,
+          _executionOutput: progress.output,
+          _executionError: progress.error,
+        },
+      };
+    });
+  }, [nodes, nodeProgress]);
+
   // Enrich edges with mapping status data for ConveyorBeltEdge badges
   const enrichedEdges = useMemo(() => {
     return edges.map((edge) => {
       const targetFields = getInputFields(edge.target);
       const sourceOutput = getOutputFields(edge.source);
 
+      // 소스 노드 실행 상태/출력
+      const sourceProgress = nodeProgress?.[edge.source];
+      const targetProgress = nodeProgress?.[edge.target];
+
+      // 엣지 실행 상태 결정
+      let executionStatus: 'idle' | 'running' | 'completed' | 'failed' = 'idle';
+      if (sourceProgress?.status === 'completed' && targetProgress?.status === 'running') {
+        executionStatus = 'running';
+      } else if (sourceProgress?.status === 'completed' && targetProgress?.status === 'completed') {
+        executionStatus = 'completed';
+      } else if (sourceProgress?.status === 'failed' || targetProgress?.status === 'failed') {
+        executionStatus = 'failed';
+      } else if (sourceProgress?.status === 'running') {
+        executionStatus = 'running';
+      }
+
       // 타겟에 입력 필드가 없으면: 데이터가 그냥 통과하는 노드
       if (targetFields.length === 0) {
         // 소스에 출력이 있으면 데이터가 흐르고 있으므로 complete
         if (sourceOutput.own.length > 0 || sourceOutput.passthrough.length > 0) {
-          return { ...edge, data: { ...(edge.data || {}), mappingStatus: 'complete' as const } };
+          return { ...edge, data: { ...(edge.data || {}), mappingStatus: 'complete' as const, executionStatus, sourceOutput: sourceProgress?.output } };
         }
         // 소스에도 출력이 없으면 noSchema
-        return { ...edge, data: { ...(edge.data || {}), mappingStatus: 'noSchema' as const } };
+        return { ...edge, data: { ...(edge.data || {}), mappingStatus: 'noSchema' as const, executionStatus, sourceOutput: sourceProgress?.output } };
       }
 
       // 소스에 출력이 없으면 noSchema
       if (sourceOutput.own.length === 0 && sourceOutput.passthrough.length === 0) {
-        return { ...edge, data: { ...(edge.data || {}), mappingStatus: 'noSchema' as const } };
+        return { ...edge, data: { ...(edge.data || {}), mappingStatus: 'noSchema' as const, executionStatus, sourceOutput: sourceProgress?.output } };
       }
 
       const targetNode = nodes.find((n) => n.id === edge.target);
@@ -886,9 +740,9 @@ function FactoryCanvasInner(
       const totalCount = targetFields.length;
       const status = mappedCount === 0 ? 'none' as const : mappedCount >= totalCount ? 'complete' as const : 'partial' as const;
 
-      return { ...edge, data: { ...(edge.data || {}), mappingStatus: status, mappedCount, totalCount } };
+      return { ...edge, data: { ...(edge.data || {}), mappingStatus: status, mappedCount, totalCount, executionStatus, sourceOutput: sourceProgress?.output } };
     }) as Edge[];
-  }, [edges, nodes, getInputFields, getOutputFields]);
+  }, [edges, nodes, getInputFields, getOutputFields, nodeProgress]);
 
   // Handle edge click
   const handleEdgeClick = useCallback(
@@ -902,7 +756,7 @@ function FactoryCanvasInner(
     <ConnectionDragContext.Provider value={connectionDragState}>
       <div ref={reactFlowWrapper} className="flex-1 h-full">
         <ReactFlow
-          nodes={nodes}
+          nodes={enrichedNodes}
           edges={enrichedEdges}
           onNodesChange={handleNodesChange}
           onEdgesChange={handleEdgesChange}
@@ -931,17 +785,7 @@ function FactoryCanvasInner(
           />
           <MiniMap
             nodeStrokeColor="#333"
-            nodeColor={(n) => {
-              if (n.type === 'formStartNode') return '#d97706';
-              if (n.type === 'apiStartNode') return '#0d9488';
-              if (n.type === 'warehouseNode') return '#059669';
-              if (n.type === 'sorterNode') return '#7c3aed';
-              if (n.type === 'apiCallNode') return '#0891b2';
-              if (n.type === 'unpackerNode') return '#e11d48';
-              if (n.type === 'knowledgeNode') return '#6366f1';
-              if (n.type === 'markdownViewerNode') return '#6366f1';
-              return '#475569';
-            }}
+            nodeColor={(n) => nodeRegistry.getMinimapColor(n.type || '')}
             style={{ bottom: 20, right: 20, background: '#111827', borderRadius: 8 }}
           />
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#1f2937" />

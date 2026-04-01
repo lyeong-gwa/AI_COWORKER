@@ -1,5 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
+import { NodeOutputPill } from './NodeOutputPill';
+import { ExecutionStatusBadge } from './ExecutionStatusBadge';
 
 export interface ApiStartNodeData extends Record<string, unknown> {
   nodeId: string;
@@ -40,9 +42,20 @@ function ApiStartNodeInner({ data, selected }: { data: ApiStartNodeData; selecte
     DELETE: 'bg-red-600/60 text-red-200',
   };
 
+  const execStatus = data._executionStatus as string | undefined;
+  const execOutput = data._executionOutput;
+  const execError = data._executionError as string | undefined;
+  const execBorder = execStatus === 'running'
+    ? 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+    : execStatus === 'completed'
+      ? 'border-green-500 shadow-[0_0_12px_rgba(34,197,94,0.3)]'
+      : execStatus === 'failed'
+        ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+        : 'border-teal-400';
+
   return (
     <div
-      className={`bg-gradient-to-b from-teal-600 to-teal-800 border-2 border-teal-400 rounded-xl shadow-2xl min-w-[220px] max-w-[280px] transition-all ${
+      className={`bg-gradient-to-b from-teal-600 to-teal-800 border-2 ${execBorder} rounded-xl shadow-2xl min-w-[220px] max-w-[280px] transition-all ${
         selected ? 'ring-2 ring-teal-300 ring-offset-2 ring-offset-gray-900 scale-105' : ''
       }`}
     >
@@ -65,6 +78,7 @@ function ApiStartNodeInner({ data, selected }: { data: ApiStartNodeData; selecte
             </div>
             <div className="text-white font-semibold text-sm truncate">{data.instanceName}</div>
           </div>
+          <ExecutionStatusBadge status={execStatus} />
         </div>
       </div>
 
@@ -93,6 +107,9 @@ function ApiStartNodeInner({ data, selected }: { data: ApiStartNodeData; selecte
           </div>
         )}
       </div>
+
+      {/* Execution output pill */}
+      <NodeOutputPill status={execStatus} output={execOutput} error={execError} />
 
       {/* Decorative */}
       <div className="absolute -top-1 -right-1 text-teal-400/15 text-2xl pointer-events-none">{'\u{1F680}'}</div>

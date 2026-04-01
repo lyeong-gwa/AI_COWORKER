@@ -2,6 +2,8 @@ import { memo, useState, useEffect, useContext } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { factoryApi } from '../../services/api';
 import { ConnectionDragContext } from './FactoryNode';
+import { NodeOutputPill } from './NodeOutputPill';
+import { ExecutionStatusBadge } from './ExecutionStatusBadge';
 
 export interface WarehouseNodeData extends Record<string, unknown> {
   nodeId: string;
@@ -17,6 +19,17 @@ function WarehouseNodeInner({ data, selected, id }: { data: WarehouseNodeData; s
 
   // Check if this warehouse is an invalid drop target during connection drag
   const isInvalidTarget = connectionDrag?.invalidTargetIds.has(id) ?? false;
+
+  const execStatus = data._executionStatus as string | undefined;
+  const execOutput = data._executionOutput;
+  const execError = data._executionError as string | undefined;
+  const execBorder = execStatus === 'running'
+    ? 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+    : execStatus === 'completed'
+      ? 'border-green-500 shadow-[0_0_12px_rgba(34,197,94,0.3)]'
+      : execStatus === 'failed'
+        ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+        : '';
 
   // Fetch warehouse count on mount and periodically
   useEffect(() => {
@@ -42,9 +55,9 @@ function WarehouseNodeInner({ data, selected, id }: { data: WarehouseNodeData; s
 
   return (
     <div
-      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : 'from-emerald-700 to-emerald-900 border-emerald-400'} border-2 rounded-xl shadow-2xl min-w-[200px] transition-all ${
+      className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : execBorder ? `from-emerald-700 to-emerald-900 ${execBorder}` : 'from-emerald-700 to-emerald-900 border-emerald-400'} border-2 rounded-xl shadow-2xl min-w-[200px] transition-all ${
         selected ? 'ring-2 ring-emerald-300 ring-offset-2 ring-offset-gray-900 scale-105' : ''
-      }${isInvalidTarget ? ' animate-pulse' : ''}`}
+      }${isInvalidTarget && !execStatus ? ' animate-pulse' : ''}`}
     >
       {/* Input Handle (left side only - warehouses receive) */}
       <Handle
@@ -71,6 +84,7 @@ function WarehouseNodeInner({ data, selected, id }: { data: WarehouseNodeData; s
             <div className="text-xs text-emerald-300/80 font-medium uppercase tracking-wider">창고</div>
             <div className="text-white font-semibold text-sm truncate">{data.instanceName}</div>
           </div>
+          <ExecutionStatusBadge status={execStatus} />
         </div>
       </div>
 
@@ -91,8 +105,26 @@ function WarehouseNodeInner({ data, selected, id }: { data: WarehouseNodeData; s
         </div>
       </div>
 
+      {/* Execution output pill */}
+      <NodeOutputPill status={execStatus} output={execOutput} error={execError} />
+
       {/* Decorative */}
       <div className="absolute -top-1 -right-1 text-emerald-400/15 text-2xl pointer-events-none">📦</div>
+
+      {/* Output Handle (right side - pass-through) */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="output"
+        style={{
+          background: '#065f46',
+          border: '3px solid #34d399',
+          width: 14,
+          height: 14,
+          top: '50%',
+        }}
+        title="출력 (패스스루)"
+      />
     </div>
   );
 }

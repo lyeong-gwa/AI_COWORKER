@@ -7,7 +7,6 @@ interface ChatModeSelectorProps {
 
 const MODE_CONFIG: { mode: ChatMode; label: string; icon: string }[] = [
   { mode: 'general', label: '일반', icon: '\uD83D\uDCAC' },
-  { mode: 'taskboard', label: '태스크', icon: '\uD83D\uDCCB' },
   { mode: 'knowledge', label: '지식', icon: '\uD83D\uDCDA' },
   { mode: 'node', label: '노드', icon: '\uD83D\uDD37' },
   { mode: 'workflow', label: '워크플로우', icon: '\u2699\uFE0F' },

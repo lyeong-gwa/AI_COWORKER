@@ -1,71 +1,4 @@
 // ============================================
-// Task Board Types (Trello-style)
-// ============================================
-
-export interface TodoItem {
-  id: string;
-  text: string;
-  completed: boolean;
-}
-
-export interface Comment {
-  id: string;
-  authorId: string;
-  authorName: string;
-  content: string;
-  createdAt: string;
-}
-
-export interface ActivityLog {
-  id: string;
-  userId: string;
-  userName: string;
-  action: string;
-  detail: string;
-  timestamp: string;
-}
-
-export interface ReferenceDoc {
-  docId: string;
-  title: string;
-  content: string;
-  category: string;
-  score: number;
-}
-
-export interface TaskCard {
-  id: string;
-  title: string;
-  description: string;
-  status: 'backlog' | 'todo' | 'in-progress' | 'review' | 'done';
-  priority: 'low' | 'medium' | 'high' | 'urgent';
-  assigneeId?: string;
-  assigneeName?: string;
-  todos: TodoItem[];
-  comments: Comment[];
-  activityLog: ActivityLog[];
-  references: ReferenceDoc[];
-  tags: string[];
-  dueDate?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// Task types for API compatibility
-export type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'review' | 'done';
-export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
-
-// Task (API response type) - alias to TaskCard for compatibility
-export type Task = TaskCard;
-
-export interface TaskColumn {
-  id: string;
-  title: string;
-  status: TaskCard['status'];
-  cards: TaskCard[];
-}
-
-// ============================================
 // Knowledge Base Types
 // 문서 1개 = 청크 1개 (1:1 매핑)
 // ============================================
@@ -457,7 +390,6 @@ export interface WorkflowNode {
 
 export type ChatContextType =
   | { type: 'none' }
-  | { type: 'task'; data: TaskCard }
   | { type: 'node'; data: AINode }
   | { type: 'workflow'; data: Workflow }
   | { type: 'document'; data: KnowledgeDocument };
@@ -474,7 +406,7 @@ export interface ChatMessage {
 // Chat Mode Types (구조화된 질문 시스템)
 // ============================================
 
-export type ChatMode = 'general' | 'taskboard' | 'knowledge' | 'node' | 'workflow';
+export type ChatMode = 'general' | 'knowledge' | 'node' | 'workflow';
 export type ChatAction = 'create' | 'search' | 'ask' | 'modify' | 'explain';
 
 export interface KnowledgeFilterState {

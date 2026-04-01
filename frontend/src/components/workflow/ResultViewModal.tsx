@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { factoryApi } from '../../services/api';
 import type { WorkflowExecution } from '../../services/api';
 
@@ -76,8 +76,8 @@ function formatKeyLabel(key: string): string {
  * Parse a single line of text and apply inline markdown-like formatting.
  * Supports **bold** syntax.
  */
-function parseInlineMarkdown(line: string): JSX.Element[] {
-  const parts: JSX.Element[] = [];
+function parseInlineMarkdown(line: string): React.JSX.Element[] {
+  const parts: React.JSX.Element[] = [];
   // Match **bold** and `inline code`
   const regex = /(\*\*(.+?)\*\*|`([^`]+)`)/g;
   let lastIndex = 0;
@@ -113,9 +113,9 @@ function parseInlineMarkdown(line: string): JSX.Element[] {
  * Handles paragraphs, bullet points, and numbered lists.
  * Supports **bold** inline markdown.
  */
-function renderTextContent(text: string): JSX.Element {
+function renderTextContent(text: string): React.JSX.Element {
   const lines = text.split('\n');
-  const elements: JSX.Element[] = [];
+  const elements: React.JSX.Element[] = [];
   let i = 0;
 
   while (i < lines.length) {
@@ -170,7 +170,7 @@ function renderTextContent(text: string): JSX.Element {
         : level === 2
         ? 'text-xs font-bold text-blue-300 mt-2 mb-1'
         : 'text-xs font-semibold text-purple-300 mt-1.5 mb-0.5';
-      const Tag = `h${level + 2}` as keyof JSX.IntrinsicElements;
+      const Tag = `h${level + 2}` as keyof React.JSX.IntrinsicElements;
       elements.push(
         <Tag key={`h-${i}`} className={className}>
           {parseInlineMarkdown(text)}
@@ -182,7 +182,7 @@ function renderTextContent(text: string): JSX.Element {
 
     // Numbered list item: "1. ...", "2. ...", etc.
     if (/^\d+\.\s/.test(trimmed)) {
-      const listItems: JSX.Element[] = [];
+      const listItems: React.JSX.Element[] = [];
       while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
         const itemText = lines[i].trim().replace(/^\d+\.\s/, '');
         listItems.push(
@@ -202,7 +202,7 @@ function renderTextContent(text: string): JSX.Element {
 
     // Bullet point: "- ..." or "* ..."
     if (/^[-*]\s/.test(trimmed)) {
-      const listItems: JSX.Element[] = [];
+      const listItems: React.JSX.Element[] = [];
       while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {
         const itemText = lines[i].trim().replace(/^[-*]\s/, '');
         listItems.push(
@@ -239,7 +239,7 @@ function renderTextContent(text: string): JSX.Element {
 /**
  * Render an array value as a list.
  */
-function renderArrayContent(arr: unknown[]): JSX.Element {
+function renderArrayContent(arr: unknown[]): React.JSX.Element {
   if (arr.length === 0) {
     return <p className="text-xs text-gray-500 italic">빈 배열</p>;
   }
@@ -258,7 +258,7 @@ function renderArrayContent(arr: unknown[]): JSX.Element {
 /**
  * Render a single value (used inside object rendering).
  */
-function renderValue(value: unknown): JSX.Element {
+function renderValue(value: unknown): React.JSX.Element {
   if (value === null || value === undefined) {
     return <p className="text-xs text-gray-500 italic">null</p>;
   }
@@ -301,7 +301,7 @@ function renderValue(value: unknown): JSX.Element {
  * - array → list
  * - fallback → raw JSON pre block
  */
-function renderOutputData(data: unknown): JSX.Element {
+function renderOutputData(data: unknown): React.JSX.Element {
   if (data === null || data === undefined) {
     return <p className="text-xs text-gray-500 italic">데이터 없음</p>;
   }

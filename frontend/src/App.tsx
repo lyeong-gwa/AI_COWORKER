@@ -4,7 +4,7 @@ import { ToastProvider } from './components/common/Toast';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { Layout } from './components/common/Layout';
 
-const TaskBoardPage = lazy(() => import('./pages/TaskBoardPage').then(m => ({ default: m.TaskBoardPage })));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const KnowledgeBasePage = lazy(() => import('./pages/KnowledgeBasePage').then(m => ({ default: m.KnowledgeBasePage })));
 const ApiDefinitionPage = lazy(() => import('./pages/ApiDefinitionPage'));
 const NodeManagementPage = lazy(() => import('./pages/NodeManagementPage').then(m => ({ default: m.NodeManagementPage })));
@@ -30,7 +30,7 @@ function App() {
           <Suspense fallback={<PageLoader />}>
             <Routes>
               <Route path="/" element={<Layout />}>
-                <Route index element={<TaskBoardPage />} />
+                <Route index element={<DashboardPage />} />
                 <Route path="knowledge" element={<KnowledgeBasePage />} />
                 <Route path="api-definitions" element={
                   <Suspense fallback={<PageLoader />}>

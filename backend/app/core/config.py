@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # API 설정
     API_V1_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:5177", "http://localhost:5178", "http://localhost:3000", "http://localhost:9090"]
+    CORS_ORIGINS: List[str] = ["http://localhost:5173"]
 
     # 데이터베이스
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/app.db"

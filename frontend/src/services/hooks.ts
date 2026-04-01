@@ -6,7 +6,6 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  taskApi,
   knowledgeApi,
   nodeApi,
   workflowApi,
@@ -14,7 +13,6 @@ import {
   ApiError,
 } from './api';
 import type {
-  Task,
   KnowledgeDocument,
   AINode,
   Workflow,
@@ -33,61 +31,6 @@ interface UseQueryResult<T> {
   refetch: () => Promise<void>;
 }
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Task 훅
-// ─────────────────────────────────────────────────────────────────────────────
-
-export function useTasks(): UseQueryResult<Task[]> {
-  const [data, setData] = useState<Task[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetch = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await taskApi.list();
-      setData(result);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : '데이터를 불러오는데 실패했습니다');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetch();
-  }, [fetch]);
-
-  return { data, loading, error, refetch: fetch };
-}
-
-export function useTask(id: string | null): UseQueryResult<Task> {
-  const [data, setData] = useState<Task | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetch = useCallback(async () => {
-    if (!id) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await taskApi.get(id);
-      setData(result);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : '데이터를 불러오는데 실패했습니다');
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    fetch();
-  }, [fetch]);
-
-  return { data, loading, error, refetch: fetch };
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Knowledge 훅

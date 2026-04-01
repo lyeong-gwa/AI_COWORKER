@@ -41,6 +41,12 @@ export function KnowledgeConfigPanel({
   const selectedTags = config.tags || [];
   const maxResults = config.maxResults ?? 5;
 
+  // Refs to avoid stale closures in async callbacks
+  const configRef = useRef(config);
+  configRef.current = config;
+  const onUpdateConfigRef = useRef(onUpdateConfig);
+  onUpdateConfigRef.current = onUpdateConfig;
+
   // Suppress unused var lint
   void nodeId;
 
@@ -93,11 +99,11 @@ export function KnowledgeConfigPanel({
           );
         }
         setMatchingDocs(filtered);
-        onUpdateConfig({ ...config, matchCount: filtered.length });
+        onUpdateConfigRef.current({ ...configRef.current, matchCount: filtered.length });
       })
       .catch(() => {
         setMatchingDocs([]);
-        onUpdateConfig({ ...config, matchCount: 0 });
+        onUpdateConfigRef.current({ ...configRef.current, matchCount: 0 });
       })
       .finally(() => {
         setDocsLoading(false);
@@ -282,7 +288,7 @@ export function KnowledgeConfigPanel({
             <>
               {/* Selected tags badges */}
               {selectedTags.length > 0 && (
-                <div className="flex flex-wrap gap-1 mb-2">
+                <div className="flex flex-wrap gap-1 mb-2 max-h-16 overflow-y-auto">
                   {selectedTags.map((tag) => (
                     <button
                       key={tag}
@@ -320,7 +326,7 @@ export function KnowledgeConfigPanel({
                   <p className="text-gray-500 text-xs">등록된 태그가 없습니다</p>
                 </div>
               ) : (
-                <div className="max-h-40 overflow-y-auto bg-gray-900 border border-gray-600 rounded-lg p-2 space-y-0.5 custom-scrollbar">
+                <div className="max-h-48 overflow-y-auto bg-gray-900 border border-gray-600 rounded-lg p-2 space-y-0.5 custom-scrollbar relative">
                   {filteredTags.length === 0 ? (
                     <p className="text-gray-500 text-xs text-center py-2">일치하는 태그 없음</p>
                   ) : (
@@ -360,7 +366,7 @@ export function KnowledgeConfigPanel({
                 </div>
               )}
 
-              <p className="text-[10px] text-gray-500 mt-1">
+              <p className="text-[10px] text-gray-500 mt-1.5 relative">
                 선택한 태그에 해당하는 문서만 검색 대상이 됩니다
               </p>
             </>

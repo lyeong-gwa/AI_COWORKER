@@ -51,3 +51,18 @@ body {
     transform: translateX(0);
   }
 }
+
+/* Conveyor belt flow animation for running edges */
+@keyframes conveyor-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+/* Ping animation for running edge badge */
+@keyframes ping {
+  75%, 100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}

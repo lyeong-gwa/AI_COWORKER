@@ -1,6 +1,4 @@
 import type {
-  TaskCard,
-  TaskColumn,
   KnowledgeDocument,
   AINode,
   Workflow,
@@ -12,45 +10,6 @@ import type {
 // ============================================
 
 export const mockUsers: User[] = [];
-
-// ============================================
-// Task Board Data
-// ============================================
-
-export const mockTasks: TaskCard[] = [];
-
-export const mockColumns: TaskColumn[] = [
-  {
-    id: 'col-1',
-    title: 'Backlog',
-    status: 'backlog',
-    cards: mockTasks.filter((t) => t.status === 'backlog'),
-  },
-  {
-    id: 'col-2',
-    title: 'To Do',
-    status: 'todo',
-    cards: mockTasks.filter((t) => t.status === 'todo'),
-  },
-  {
-    id: 'col-3',
-    title: 'In Progress',
-    status: 'in-progress',
-    cards: mockTasks.filter((t) => t.status === 'in-progress'),
-  },
-  {
-    id: 'col-4',
-    title: 'Review',
-    status: 'review',
-    cards: mockTasks.filter((t) => t.status === 'review'),
-  },
-  {
-    id: 'col-5',
-    title: 'Done',
-    status: 'done',
-    cards: mockTasks.filter((t) => t.status === 'done'),
-  },
-];
 
 // ============================================
 // Knowledge Base Data

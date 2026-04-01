@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { factoryApi } from '../../services/api';
 import type { WarehouseEntry } from '../../types';
 
@@ -10,6 +10,7 @@ interface MarkdownViewerModalProps {
   resultNodeId: string;
   resultNodeName: string;
   onReExecute: () => void;
+  displayKey?: string;
 }
 
 type ActiveTab = 'rendered' | 'raw';
@@ -20,11 +21,13 @@ type ActiveTab = 'rendered' | 'raw';
 
 // ─── Markdown Extraction ──────────────────────────────────────────────────────
 
-function extractMarkdown(outputData: unknown): string | null {
+function extractMarkdown(outputData: unknown, displayKey?: string): string | null {
   if (!outputData) return null;
   if (typeof outputData === 'string') return outputData;
   if (typeof outputData === 'object') {
     const data = outputData as Record<string, unknown>;
+    // 0순위: 사용자가 지정한 키
+    if (displayKey && typeof data[displayKey] === 'string') return data[displayKey] as string;
     // 1순위: 'markdown' 키를 직접 확인
     if (typeof data.markdown === 'string') return data.markdown;
     // 2순위: '_output' 키 확인 (비-dict 출력인 경우)
@@ -47,8 +50,8 @@ function extractMarkdown(outputData: unknown): string | null {
 /**
  * Parse inline markdown: **bold**, *italic*, ~~strike~~, `code`, [link](url)
  */
-function parseInline(text: string): JSX.Element[] {
-  const parts: JSX.Element[] = [];
+function parseInline(text: string): React.JSX.Element[] {
+  const parts: React.JSX.Element[] = [];
   // Combined regex for inline elements
   const regex = /(\*\*(.+?)\*\*|\*([^*]+?)\*|~~(.+?)~~|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/g;
   let lastIndex = 0;
@@ -291,7 +294,7 @@ function tokenize(markdown: string): Token[] {
 
 // ─── Diff Line Highlighting ───────────────────────────────────────────────────
 
-function renderDiffLine(line: string, idx: number): JSX.Element {
+function renderDiffLine(line: string, idx: number): React.JSX.Element {
   if (line.startsWith('+') && !line.startsWith('+++')) {
     return (
       <div key={idx} className="bg-emerald-900/40 text-emerald-300 px-3 py-0.5 leading-relaxed">
@@ -326,7 +329,7 @@ function renderDiffLine(line: string, idx: number): JSX.Element {
  * Render blockquote content, detecting callout-style prefixes like
  * 🔵 **[Info]**, 🟢 **[OK]**, 🔴 **[Error]**, etc.
  */
-function renderBlockquoteContent(lines: string[], keyBase: number): JSX.Element {
+function renderBlockquoteContent(lines: string[], keyBase: number): React.JSX.Element {
   const fullText = lines.join('\n');
 
   // Detect callout patterns: emoji + **[Label]**
@@ -394,9 +397,9 @@ function renderBlockquoteContent(lines: string[], keyBase: number): JSX.Element 
 
 // ─── Full Markdown Renderer ───────────────────────────────────────────────────
 
-function renderMarkdown(markdown: string): JSX.Element {
+function renderMarkdown(markdown: string): React.JSX.Element {
   const tokens = tokenize(markdown);
-  const elements: JSX.Element[] = [];
+  const elements: React.JSX.Element[] = [];
   let prevType: string | null = null;
 
   tokens.forEach((token, idx) => {
@@ -417,7 +420,7 @@ function renderMarkdown(markdown: string): JSX.Element {
             : token.level === 3
             ? 'text-base font-bold text-slate-200'
             : 'text-sm font-semibold text-slate-300';
-        const Tag = `h${token.level}` as keyof JSX.IntrinsicElements;
+        const Tag = `h${token.level}` as keyof React.JSX.IntrinsicElements;
         elements.push(
           <Tag
             key={idx}
@@ -592,6 +595,7 @@ function MarkdownViewerModal({
   resultNodeId,
   resultNodeName,
   onReExecute,
+  displayKey,
 }: MarkdownViewerModalProps) {
   const [activeTab, setActiveTab] = useState<ActiveTab>('rendered');
   const [entries, setEntries] = useState<WarehouseEntry[]>([]);
@@ -599,6 +603,7 @@ function MarkdownViewerModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -649,7 +654,7 @@ function MarkdownViewerModal({
   // Get selected warehouse entry
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? null;
   const rawOutput = selectedEntry?.data ?? null;
-  const markdownText = rawOutput != null ? extractMarkdown(rawOutput) : null;
+  const markdownText = rawOutput != null ? extractMarkdown(rawOutput, displayKey) : null;
   const hasError = rawOutput != null && markdownText === null;
 
   // Copy markdown to clipboard
@@ -663,6 +668,21 @@ function MarkdownViewerModal({
       })
       .catch(() => {/* ignore */});
   }, [markdownText]);
+
+  // Clear all entries
+  const handleClearAll = useCallback(async () => {
+    if (!confirm('이 뷰어의 모든 결과를 삭제하시겠습니까?')) return;
+    setClearing(true);
+    try {
+      await factoryApi.clearWarehouse(resultNodeId);
+      setEntries([]);
+      setSelectedEntryId(null);
+    } catch {
+      // ignore
+    } finally {
+      setClearing(false);
+    }
+  }, [resultNodeId]);
 
   // Download as .md file
   const handleDownload = useCallback(() => {
@@ -729,13 +749,29 @@ function MarkdownViewerModal({
     if (loading) return renderLoading();
     if (error) return renderError();
     if (hasError) {
+      const errorData = rawOutput as Record<string, unknown>;
+      const statusCode = errorData?.status as number | undefined;
+      const errorMsg = errorData?.error as string | undefined;
       return (
-        <div className="flex flex-col items-center justify-center py-20 gap-3">
+        <div className="flex flex-col items-center justify-center py-16 gap-4 px-8">
           <div className="w-12 h-12 rounded-xl bg-amber-900/30 border border-amber-700/50 flex items-center justify-center text-amber-400 text-2xl">
-            ⚠
+            {statusCode && statusCode >= 400 ? '✕' : '⚠'}
           </div>
-          <p className="text-amber-400 text-sm font-medium">마크다운 텍스트를 찾을 수 없습니다</p>
-          <p className="text-slate-600 text-xs">원본 데이터 탭에서 내용을 확인하세요</p>
+          <p className="text-amber-400 text-sm font-medium">
+            {statusCode && statusCode >= 400
+              ? `실행 결과: HTTP ${statusCode} 오류`
+              : '마크다운 텍스트를 찾을 수 없습니다'}
+          </p>
+          {errorMsg && (
+            <p className="text-slate-400 text-xs text-center max-w-md">{errorMsg}</p>
+          )}
+          <p className="text-slate-600 text-xs">원본 데이터 탭에서 상세 내용을 확인하거나, 재실행하세요</p>
+          <button
+            onClick={onReExecute}
+            className="mt-1 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors"
+          >
+            재실행
+          </button>
         </div>
       );
     }
@@ -857,13 +893,28 @@ function MarkdownViewerModal({
               className="flex-1 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-300 px-3 py-1.5 focus:outline-none focus:border-indigo-500 transition-colors"
             >
               {entries.map((entry, idx) => {
-                const md = extractMarkdown(entry.data);
+                const md = extractMarkdown(entry.data, displayKey);
                 const date = new Date(entry.createdAt).toLocaleString('ko-KR', {
                   month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
                 });
-                const label = md
-                  ? `#${entries.length - idx} — ${date}`
-                  : `#${entries.length - idx} — ${date} (데이터 없음)`;
+                // 엔트리 데이터에서 식별 정보 추출 (문의글 제목 등)
+                const entryData = entry.data as Record<string, unknown> | null;
+                const itemTitle = entryData
+                  ? (entryData.title as string) || (entryData.instanceName as string) || ''
+                  : '';
+                const titleSuffix = itemTitle ? ` — ${itemTitle.slice(0, 30)}` : '';
+                // 에러 상태 정보 추출
+                let statusSuffix = '';
+                if (!md && entryData) {
+                  const status = entryData.status as number | undefined;
+                  const errMsg = entryData.error as string | undefined;
+                  if (status && status >= 400) statusSuffix = ` (HTTP ${status})`;
+                  else if (errMsg) statusSuffix = ` (오류)`;
+                  else statusSuffix = ' (마크다운 없음)';
+                } else if (!md) {
+                  statusSuffix = ' (데이터 없음)';
+                }
+                const label = `#${entries.length - idx} — ${date}${titleSuffix}${statusSuffix}`;
                 return (
                   <option key={entry.id} value={entry.id}>
                     {label}
@@ -874,6 +925,14 @@ function MarkdownViewerModal({
             <span className="text-xs text-slate-600 shrink-0">
               {entries.length}개 보관중
             </span>
+            <button
+              onClick={handleClearAll}
+              disabled={clearing}
+              className="text-xs text-red-400/70 hover:text-red-400 hover:bg-red-900/20 px-2 py-1 rounded transition-colors shrink-0 disabled:opacity-50"
+              title="전체 비우기"
+            >
+              {clearing ? '삭제중...' : '🗑️ 비우기'}
+            </button>
           </div>
         )}
 

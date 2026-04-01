@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import type { Node, Edge } from '@xyflow/react';
+import type { AINode } from '../../types';
 
 interface ScheduleConfig {
   type?: string;
@@ -14,6 +16,15 @@ interface FormStartConfig {
   defaultValues?: Record<string, any>;
 }
 
+interface DerivedTriggerField {
+  name: string;
+  type: string;
+  description: string;
+  required: boolean;
+  sourceNodeName: string;
+  enum?: string[];
+}
+
 interface FormStartConfigPanelProps {
   nodeId: string;
   nodeName: string;
@@ -24,6 +35,64 @@ interface FormStartConfigPanelProps {
   executing?: boolean;
   onDelete: () => void;
   onClose: () => void;
+  allNodes?: Node[];
+  edges?: Edge[];
+  aiNodes?: AINode[];
+}
+
+function deriveTriggerFields(
+  triggerNodeId: string,
+  allNodes: Node[],
+  edges: Edge[],
+  aiNodes: AINode[]
+): DerivedTriggerField[] {
+  const visited = new Set<string>();
+  const queue: string[] = [triggerNodeId];
+  visited.add(triggerNodeId);
+
+  const seen = new Set<string>();
+  const fields: DerivedTriggerField[] = [];
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    const outEdges = edges.filter((e) => e.source === currentId);
+
+    for (const edge of outEdges) {
+      const targetId = edge.target;
+      if (visited.has(targetId)) continue;
+      visited.add(targetId);
+
+      const node = allNodes.find((n) => n.id === targetId);
+      if (!node) continue;
+
+      const aiNodeId = (node.data as any).aiNodeId || (node.data as any).nodeId;
+      const aiNode = aiNodes.find((n) => n.id === aiNodeId);
+
+      if (aiNode?.inputSchema?.properties) {
+        const required = aiNode.inputSchema.required || [];
+
+        for (const [propName, propDef] of Object.entries(aiNode.inputSchema.properties)) {
+          if (seen.has(propName)) continue;
+          const propType = (propDef as unknown as Record<string, unknown>).type as string || 'string';
+          if (propType === 'array' || propType === 'object') continue;
+          seen.add(propName);
+
+          fields.push({
+            name: propName,
+            type: propType,
+            description: (propDef as unknown as Record<string, unknown>).description as string || '',
+            required: required.includes(propName),
+            sourceNodeName: aiNode.name,
+            enum: (propDef as unknown as Record<string, unknown>).enum as string[] | undefined,
+          });
+        }
+      }
+
+      queue.push(targetId);
+    }
+  }
+
+  return fields;
 }
 
 const SCHEDULE_TYPES = [
@@ -53,10 +122,26 @@ export function FormStartConfigPanel({
   executing,
   onDelete,
   onClose,
+  allNodes,
+  edges,
+  aiNodes,
 }: FormStartConfigPanelProps) {
   const mode = config.mode || 'manual';
   const scheduleConfig = config.scheduleConfig || {};
   const fields = (config as any).fields as Array<{name: string; label: string; type: string; required: boolean}> | undefined;
+
+  // BFS로 하류 AI 노드의 inputSchema에서 필드 도출 (config.fields 없을 때 fallback)
+  const derivedFields = useMemo(() => {
+    if (fields && fields.length > 0) return null; // config.fields가 있으면 그대로 사용
+    if (!allNodes || !edges || !aiNodes) return null;
+    return deriveTriggerFields(nodeId, allNodes, edges, aiNodes);
+  }, [fields, nodeId, allNodes, edges, aiNodes]);
+
+  // 최종 사용할 필드: config.fields 우선, 없으면 derivedFields
+  const effectiveFields = fields && fields.length > 0
+    ? fields
+    : derivedFields?.map(df => ({ name: df.name, label: df.description || df.name, type: df.type, required: df.required }));
+
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [scheduleType, setScheduleType] = useState(scheduleConfig.type || 'daily');
   const [hour, setHour] = useState(scheduleConfig.hour ?? 9);
@@ -261,10 +346,10 @@ export function FormStartConfigPanel({
         </div>
 
         {/* Form fields from config */}
-        {fields && fields.length > 0 && (
+        {effectiveFields && effectiveFields.length > 0 && (
           <div className="space-y-3 bg-gray-900 rounded-lg p-3">
             <div className="text-xs text-amber-300/70 font-medium mb-2">입력 폼</div>
-            {fields.map((field) => (
+            {effectiveFields.map((field) => (
               <div key={field.name}>
                 <label className="block text-[10px] text-gray-400 mb-1 uppercase tracking-wide">
                   {field.label}
@@ -289,8 +374,8 @@ export function FormStartConfigPanel({
           <button
             onClick={() => {
               const inputData: Record<string, unknown> = {};
-              if (fields) {
-                for (const field of fields) {
+              if (effectiveFields) {
+                for (const field of effectiveFields) {
                   inputData[field.name] = formValues[field.name] || '';
                 }
               }

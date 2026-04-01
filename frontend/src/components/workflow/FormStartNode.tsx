@@ -1,5 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
+import { NodeOutputPill } from './NodeOutputPill';
+import { ExecutionStatusBadge } from './ExecutionStatusBadge';
 
 export interface FormStartNodeData extends Record<string, unknown> {
   nodeId: string;
@@ -24,9 +26,20 @@ function FormStartNodeInner({ data, selected }: { data: FormStartNodeData; selec
   const config = data.config || {};
   const mode = config.mode || 'manual';
 
+  const execStatus = data._executionStatus as string | undefined;
+  const execOutput = data._executionOutput;
+  const execError = data._executionError as string | undefined;
+  const execBorder = execStatus === 'running'
+    ? 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+    : execStatus === 'completed'
+      ? 'border-green-500 shadow-[0_0_12px_rgba(34,197,94,0.3)]'
+      : execStatus === 'failed'
+        ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
+        : 'border-amber-400';
+
   return (
     <div
-      className={`bg-gradient-to-b from-amber-600 to-amber-800 border-2 border-amber-400 rounded-xl shadow-2xl min-w-[200px] transition-all ${
+      className={`bg-gradient-to-b from-amber-600 to-amber-800 border-2 ${execBorder} rounded-xl shadow-2xl min-w-[200px] transition-all ${
         selected ? 'ring-2 ring-amber-300 ring-offset-2 ring-offset-gray-900 scale-105' : ''
       }`}
     >
@@ -51,6 +64,7 @@ function FormStartNodeInner({ data, selected }: { data: FormStartNodeData; selec
             </div>
             <div className="text-white font-semibold text-sm truncate">{data.instanceName}</div>
           </div>
+          <ExecutionStatusBadge status={execStatus} />
         </div>
       </div>
 
@@ -64,6 +78,9 @@ function FormStartNodeInner({ data, selected }: { data: FormStartNodeData; selec
           다음 노드의 입력 양식을 폼으로 제공합니다
         </div>
       </div>
+
+      {/* Execution output pill */}
+      <NodeOutputPill status={execStatus} output={execOutput} error={execError} />
 
       {/* Decorative */}
       <div className="absolute -top-1 -right-1 text-amber-400/20 text-2xl pointer-events-none">{'\u{1F4CB}'}</div>
