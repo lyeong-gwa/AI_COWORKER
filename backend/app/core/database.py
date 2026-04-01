@@ -67,3 +67,20 @@ async def init_db() -> None:
                 )
             except Exception:
                 pass  # 이미 존재하면 무시
+
+    # 마이그레이션: ai_nodes 테이블에서 레거시 컬럼 제거
+    # SQLite는 DROP COLUMN을 지원하지 않으므로 테이블 재구성
+    async with engine.begin() as conn:
+        try:
+            cols = await conn.execute(text("PRAGMA table_info(ai_nodes)"))
+            col_names = [row[1] for row in cols.fetchall()]
+            if "linked_tool_ids" in col_names:
+                # 현재 모델에 정의된 컬럼만 유지하여 테이블 재구성
+                keep_cols = [c for c in col_names if c != "linked_tool_ids"]
+                cols_str = ", ".join(keep_cols)
+                await conn.execute(text(f"CREATE TABLE ai_nodes_new AS SELECT {cols_str} FROM ai_nodes"))
+                await conn.execute(text("DROP TABLE ai_nodes"))
+                await conn.execute(text("ALTER TABLE ai_nodes_new RENAME TO ai_nodes"))
+                print("[MIGRATE] ai_nodes: linked_tool_ids 컬럼 제거 완료")
+        except Exception as e:
+            print(f"[MIGRATE] ai_nodes 마이그레이션 스킵: {e}")
