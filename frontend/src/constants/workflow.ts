@@ -22,6 +22,7 @@ export const DEF_TYPE = {
   // 로직
   SORTER: 'sorter',
   UNPACKER: 'unpacker',
+  MAPPER: 'mapper',
   // 액션
   API_CALL: 'api-call',
   KNOWLEDGE: 'knowledge',

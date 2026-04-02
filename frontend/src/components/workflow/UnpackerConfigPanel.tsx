@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react';
+
 interface UpstreamField {
   name: string;
   type: string;
@@ -26,16 +28,74 @@ export function UnpackerConfigPanel({
   onDelete,
   onClose,
 }: UnpackerConfigPanelProps) {
-  const arrayField = config.arrayField || '';
-
-  const handleSelectField = (fieldName: string) => {
-    // Toggle: same field clicked again → deselect
-    const newValue = arrayField === fieldName ? '' : fieldName;
-    onUpdateConfig({ arrayField: newValue });
+  // Parse existing dot-path arrayField into selectedField + subPath
+  const parseArrayField = (value: string): { field: string; sub: string } => {
+    if (!value) return { field: '', sub: '' };
+    const dotIdx = value.indexOf('.');
+    if (dotIdx === -1) return { field: value, sub: '' };
+    return { field: value.slice(0, dotIdx), sub: value.slice(dotIdx + 1) };
   };
+
+  const { field: initialField, sub: initialSub } = parseArrayField(config.arrayField || '');
+
+  const [selectedField, setSelectedField] = useState<string>(initialField);
+  const [subPath, setSubPath] = useState<string>(initialSub);
+  // directInput: the raw text the user types in the "직접 입력" box
+  const [directInput, setDirectInput] = useState<string>('');
+
+  // Sync when config.arrayField changes externally
+  useEffect(() => {
+    const { field, sub } = parseArrayField(config.arrayField || '');
+    setSelectedField(field);
+    setSubPath(sub);
+  }, [config.arrayField]);
 
   // Suppress unused var lint
   void nodeId;
+
+  const arrayField = config.arrayField || '';
+
+  const getFieldType = (name: string): string => {
+    return upstreamFields.find(f => f.name === name)?.type ?? '';
+  };
+
+  const commitSelection = (field: string, sub: string) => {
+    const value = field && sub ? `${field}.${sub}` : field;
+    onUpdateConfig({ arrayField: value });
+  };
+
+  const handleSelectField = (fieldName: string) => {
+    if (selectedField === fieldName) {
+      // Deselect
+      setSelectedField('');
+      setSubPath('');
+      onUpdateConfig({ arrayField: '' });
+    } else {
+      setSelectedField(fieldName);
+      setSubPath('');
+      onUpdateConfig({ arrayField: fieldName });
+    }
+  };
+
+  const handleSubPathChange = (value: string) => {
+    setSubPath(value);
+    commitSelection(selectedField, value);
+  };
+
+  const handleDirectInputChange = (value: string) => {
+    setDirectInput(value);
+  };
+
+  const handleDirectInputCommit = () => {
+    const trimmed = directInput.trim();
+    if (!trimmed) return;
+    onUpdateConfig({ arrayField: trimmed });
+    // Sync internal state
+    const { field, sub } = parseArrayField(trimmed);
+    setSelectedField(field);
+    setSubPath(sub);
+    setDirectInput('');
+  };
 
   // Type badge colors
   const typeBadge = (type: string) => {
@@ -44,7 +104,6 @@ export function UnpackerConfigPanel({
     return 'bg-gray-600/40 text-gray-300 border-gray-500/50';
   };
 
-  // Is the type likely an array?
   const isArrayLike = (type: string) => type === 'array' || type === 'object';
 
   return (
@@ -88,10 +147,19 @@ export function UnpackerConfigPanel({
         {/* Visual explanation */}
         <div className="bg-gray-900 rounded-lg p-3">
           <div className="text-[10px] text-gray-500 mb-2">동작 예시</div>
-          <div className="space-y-1 text-[10px] font-mono">
+          <div className="space-y-1 text-[10px] font-mono mb-3">
             <div className="text-gray-400">입력: {'{'} data: [A, B, C] {'}'}</div>
             <div className="text-rose-400 flex items-center gap-1">
               <span>↓</span> 선택: "data"
+            </div>
+            <div className="text-green-400">출력 1: A</div>
+            <div className="text-green-400">출력 2: B</div>
+            <div className="text-green-400">출력 3: C</div>
+          </div>
+          <div className="border-t border-gray-700/60 pt-2 space-y-1 text-[10px] font-mono">
+            <div className="text-gray-400">입력: {'{'} status: 200, data: {'{'} rules: [A, B, C] {'}'} {'}'}</div>
+            <div className="text-rose-400 flex items-center gap-1">
+              <span>↓</span> 선택: "data.rules"
             </div>
             <div className="text-green-400">출력 1: A</div>
             <div className="text-green-400">출력 2: B</div>
@@ -105,45 +173,70 @@ export function UnpackerConfigPanel({
           {upstreamFields.length > 0 ? (
             <div className="space-y-1.5">
               {upstreamFields.map(field => {
-                const isSelected = arrayField === field.name;
+                const isSelected = selectedField === field.name;
                 const isRecommended = isArrayLike(field.type);
                 return (
-                  <button
-                    key={field.name}
-                    onClick={() => handleSelectField(field.name)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all text-left ${
-                      isSelected
-                        ? 'bg-rose-900/50 border-rose-400 ring-1 ring-rose-400/50'
-                        : isRecommended
-                          ? 'bg-gray-900 border-gray-600 hover:border-rose-500/50 hover:bg-gray-900/80'
-                          : 'bg-gray-900/50 border-gray-700 hover:border-gray-500 opacity-60 hover:opacity-80'
-                    }`}
-                  >
-                    {/* Radio indicator */}
-                    <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                      isSelected ? 'border-rose-400 bg-rose-400' : 'border-gray-500'
-                    }`}>
-                      {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                    </div>
+                  <div key={field.name}>
+                    <button
+                      onClick={() => handleSelectField(field.name)}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all text-left ${
+                        isSelected
+                          ? 'bg-rose-900/50 border-rose-400 ring-1 ring-rose-400/50'
+                          : isRecommended
+                            ? 'bg-gray-900 border-gray-600 hover:border-rose-500/50 hover:bg-gray-900/80'
+                            : 'bg-gray-900/50 border-gray-700 hover:border-gray-500 opacity-60 hover:opacity-80'
+                      }`}
+                    >
+                      {/* Radio indicator */}
+                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                        isSelected ? 'border-rose-400 bg-rose-400' : 'border-gray-500'
+                      }`}>
+                        {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </div>
 
-                    {/* Field info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-gray-200 font-mono">{field.name}</span>
-                        <span className={`px-1.5 py-0.5 text-[9px] rounded border ${typeBadge(field.type)}`}>
-                          {field.type}
-                        </span>
-                        {isRecommended && (
-                          <span className="text-[9px] text-rose-400/70">추천</span>
+                      {/* Field info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-200 font-mono">{field.name}</span>
+                          <span className={`px-1.5 py-0.5 text-[9px] rounded border ${typeBadge(field.type)}`}>
+                            {field.type}
+                          </span>
+                          {isRecommended && (
+                            <span className="text-[9px] text-rose-400/70">추천</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Check icon */}
+                      {isSelected && (
+                        <span className="text-rose-300 text-sm">✓</span>
+                      )}
+                    </button>
+
+                    {/* Sub-path input: shown when this object field is selected */}
+                    {isSelected && field.type === 'object' && (
+                      <div className="mt-1.5 ml-7 p-2.5 bg-amber-900/20 border border-amber-700/40 rounded-lg">
+                        <div className="text-[10px] text-amber-300/80 mb-1.5">
+                          하위 경로 입력 <span className="text-amber-400/50">(예: rules, items.list)</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-gray-400 font-mono">{field.name}.</span>
+                          <input
+                            type="text"
+                            value={subPath}
+                            onChange={(e) => handleSubPathChange(e.target.value)}
+                            placeholder="하위 필드명"
+                            className="flex-1 bg-gray-900 border border-amber-700/50 rounded px-2 py-1 text-xs text-amber-100 font-mono placeholder-gray-600 outline-none focus:border-amber-500"
+                          />
+                        </div>
+                        {subPath && (
+                          <div className="mt-1.5 text-[10px] text-amber-300/70 font-mono">
+                            최종 경로: <span className="text-amber-200">{field.name}.{subPath}</span>
+                          </div>
                         )}
                       </div>
-                    </div>
-
-                    {/* Check icon */}
-                    {isSelected && (
-                      <span className="text-rose-300 text-sm">✓</span>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -155,6 +248,33 @@ export function UnpackerConfigPanel({
               </p>
             </div>
           )}
+        </div>
+
+        {/* Direct text input */}
+        <div>
+          <label className="block text-xs text-gray-400 mb-1.5">직접 입력</label>
+          <div className="bg-gray-900 rounded-lg p-3">
+            <div className="text-[10px] text-gray-500 mb-2">
+              필드 타입이 정확히 감지되지 않을 때 경로를 직접 입력합니다
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={directInput}
+                onChange={(e) => handleDirectInputChange(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleDirectInputCommit()}
+                placeholder="예: data.rules"
+                className="flex-1 bg-gray-800 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-200 font-mono placeholder-gray-600 outline-none focus:border-rose-500"
+              />
+              <button
+                onClick={handleDirectInputCommit}
+                disabled={!directInput.trim()}
+                className="px-3 py-1.5 bg-rose-600/30 text-rose-300 rounded text-xs hover:bg-rose-600/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                적용
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Status */}

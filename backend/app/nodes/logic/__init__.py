@@ -1,1 +1,1 @@
-from . import sorter, unpacker, condition, switch, merge, loop
+from . import sorter, unpacker, mapper, condition, switch, merge, loop

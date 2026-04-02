@@ -33,6 +33,7 @@ class NodeDefType(str, Enum):
     MERGE = "merge"
     SORTER = "sorter"
     UNPACKER = "unpacker"
+    MAPPER = "mapper"
 
     # 변환
     SET_VARIABLE = "set-variable"

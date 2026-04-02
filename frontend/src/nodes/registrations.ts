@@ -8,6 +8,7 @@ import { WarehouseNode } from '../components/workflow/WarehouseNode';
 import { SorterNode } from '../components/workflow/SorterNode';
 import { ApiCallNode } from '../components/workflow/ApiCallNode';
 import { UnpackerNode } from '../components/workflow/UnpackerNode';
+import { MapperNode } from '../components/workflow/MapperNode';
 import { KnowledgeNode } from '../components/workflow/KnowledgeNode';
 import { MarkdownViewerNode } from '../components/workflow/MarkdownViewerNode';
 
@@ -17,6 +18,7 @@ import { ApiStartConfigPanel } from '../components/workflow/ApiStartConfigPanel'
 import { SorterConfigPanel } from '../components/workflow/SorterConfigPanel';
 import { ApiCallConfigPanel } from '../components/workflow/ApiCallConfigPanel';
 import { UnpackerConfigPanel } from '../components/workflow/UnpackerConfigPanel';
+import { MapperConfigPanel } from '../components/workflow/MapperConfigPanel';
 import { KnowledgeConfigPanel } from '../components/workflow/KnowledgeConfigPanel';
 import { SystemNodePanel } from '../components/workflow/SystemNodePanel';
 import { MarkdownViewerConfigPanel } from '../components/workflow/MarkdownViewerConfigPanel';
@@ -179,6 +181,41 @@ nodeRegistry.register({
     },
   }),
   defaultData: (inst) => ({ config: inst.config || {} }),
+});
+
+nodeRegistry.register({
+  defType: DEF_TYPE.MAPPER,
+  category: 'logic',
+  reactFlowType: 'mapperNode',
+  component: MapperNode,
+  minimapColor: '#6366f1',
+  panelBehavior: { onClick: 'config' },
+  configPanel: MapperConfigPanel as any,
+  palette: {
+    icon: '\u{1F517}',
+    label: '\uB9E4\uD37C',
+    description: '\uCC3D\uACE0 \uB370\uC774\uD130\uC640 \uD0A4 \uAE30\uBC18 \uBCD1\uD569',
+    bg: 'from-indigo-700 to-indigo-900',
+    border: 'border-indigo-500',
+    dragType: 'application/systemnode',
+  },
+  createNodeData: (id, position) => ({
+    id,
+    type: 'mapperNode',
+    position,
+    data: {
+      nodeId: DEF_TYPE.MAPPER,
+      instanceName: '\uB9E4\uD37C',
+      definitionType: DEF_TYPE.MAPPER,
+      config: { outputField: 'matchedItems' },
+      inputMapping: {},
+    },
+  }),
+  defaultData: (inst) => ({ config: inst.config || { outputField: 'matchedItems' } }),
+  staticOutputFields: [
+    { name: 'matchedItems', type: 'array' },
+    { name: 'matchedCount', type: 'number' },
+  ],
 });
 
 // --- Action ---

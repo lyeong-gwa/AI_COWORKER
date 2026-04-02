@@ -126,9 +126,13 @@ export const knowledgeApi = {
   delete: (id: string): Promise<void> =>
     request(`/knowledge/${id}`, { method: 'DELETE' }),
 
-  /** 벡터 DB 동기화 (id 없으면 전체) */
-  sync: (id?: string): Promise<{ synced: number; total?: number; document?: KnowledgeDocument }> =>
+  /** 벡터 DB 동기화 (id: 단일 즉시, 없으면 전체 백그라운드) */
+  sync: (id?: string): Promise<{ synced: number; total?: number; document?: KnowledgeDocument; message?: string; status?: string }> =>
     request(`/knowledge/sync${id ? `?id=${id}` : ''}`, { method: 'POST' }),
+
+  /** 일괄 동기화 진행 상태 조회 */
+  syncStatus: (): Promise<{ status: string; total: number; synced: number; failed: number }> =>
+    request('/knowledge/sync/status'),
 
   /** 유사도 검색 */
   search: (data: SearchKnowledgeData): Promise<KnowledgeSearchResult[]> =>

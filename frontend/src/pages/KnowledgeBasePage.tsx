@@ -1339,6 +1339,10 @@ export function KnowledgeBasePage() {
   const [vectorResults, setVectorResults] = useState<KnowledgeSearchResult[]>([]);
   const [vectorSearching, setVectorSearching] = useState(false);
 
+  // Bulk sync state
+  const [bulkSyncing, setBulkSyncing] = useState(false);
+  const [bulkSyncProgress, setBulkSyncProgress] = useState<{ synced: number; total: number } | null>(null);
+
   useEffect(() => {
     document.title = '지식 베이스 | AI 업무도우미';
   }, []);
@@ -1533,6 +1537,63 @@ export function KnowledgeBasePage() {
     [documents]
   );
 
+  // ── Bulk sync (비동기 백그라운드 + 폴링) ─────────────────────────────────
+
+  const pollSyncStatus = useCallback(async () => {
+    const poll = async () => {
+      try {
+        const status = await knowledgeApi.syncStatus();
+        if (status.status === 'running') {
+          setBulkSyncProgress({ synced: status.synced, total: status.total });
+          setTimeout(poll, 1000);
+        } else {
+          // completed or failed
+          setBulkSyncing(false);
+          setBulkSyncProgress(null);
+          if (status.status === 'completed') {
+            toast.success(`전체 동기화 완료: ${status.synced}/${status.total}건 동기화됨`);
+          } else {
+            toast.error('일괄 동기화 중 오류가 발생했습니다');
+          }
+          await loadDocuments();
+        }
+      } catch {
+        setBulkSyncing(false);
+        setBulkSyncProgress(null);
+      }
+    };
+    poll();
+  }, [toast, loadDocuments]);
+
+  // 페이지 로드 시 진행 중인 동기화가 있으면 자동으로 폴링 재개
+  useEffect(() => {
+    knowledgeApi.syncStatus().then((status) => {
+      if (status.status === 'running') {
+        setBulkSyncing(true);
+        setBulkSyncProgress({ synced: status.synced, total: status.total });
+        pollSyncStatus();
+      }
+    }).catch(() => {});
+  }, [pollSyncStatus]);
+
+  const handleBulkSync = useCallback(async () => {
+    if (!isApiMode) {
+      toast.warning('일괄 동기화는 API 모드에서만 사용 가능합니다.');
+      return;
+    }
+    setBulkSyncing(true);
+    setBulkSyncProgress({ synced: 0, total: 0 });
+    try {
+      await knowledgeApi.sync();
+      pollSyncStatus();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : '';
+      toast.error(`일괄 동기화 시작에 실패했습니다${detail ? `: ${detail}` : ''}`);
+      setBulkSyncing(false);
+      setBulkSyncProgress(null);
+    }
+  }, [isApiMode, toast, pollSyncStatus]);
+
   // ── CRUD callbacks ─────────────────────────────────────────────────────────
 
   const handleDocCreated = (newDoc: KnowledgeDocument) => {
@@ -1613,6 +1674,29 @@ export function KnowledgeBasePage() {
             <span className="text-green-400">{'\u2713'} 동기화: {syncStats.synced}</span>
             <span className="text-yellow-400">{'\u23F3'} 대기: {syncStats.pending}</span>
             <span className="text-gray-400">{'\u25CB'} 미동기화: {syncStats.notSynced}</span>
+            {(syncStats.pending > 0 || syncStats.notSynced > 0 || bulkSyncing) && (
+              <button
+                onClick={handleBulkSync}
+                disabled={bulkSyncing}
+                className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs font-medium flex items-center gap-1.5"
+              >
+                {bulkSyncing ? (
+                  <>
+                    <span className="animate-spin">{'\u21BB'}</span>
+                    <span>
+                      동기화 중{bulkSyncProgress && bulkSyncProgress.total > 0
+                        ? ` (${bulkSyncProgress.synced}/${bulkSyncProgress.total})`
+                        : '...'}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span>{'\u21BB'}</span>
+                    <span>일괄 재동기화</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-3">

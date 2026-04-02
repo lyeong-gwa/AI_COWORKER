@@ -5,8 +5,10 @@ MD 파일 기반 지식 문서 관리 + ChromaDB 유사도 검색
 """
 
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 import logging
+import time
+import threading
 
 from ...schemas.knowledge import (
     KnowledgeCreate, KnowledgeUpdate,
@@ -19,6 +21,16 @@ from ...services.knowledge_file_service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# ── 일괄 동기화 상태 (in-memory, 단일 프로세스 기준) ────────────────────────
+_bulk_sync_state: dict = {
+    "status": "idle",     # idle | running | completed | failed
+    "total": 0,
+    "synced": 0,
+    "failed": 0,
+    "started_at": None,
+}
+_bulk_sync_lock = threading.Lock()
 
 
 def _doc_to_response(doc: KnowledgeFileDoc) -> dict:
@@ -197,11 +209,56 @@ async def delete_document(doc_id: str):
         logger.warning(f"ChromaDB 삭제 실패: {doc_id} - {e}")
 
 
+def _run_bulk_sync():
+    """백그라운드에서 전체 문서 동기화 실행"""
+    from ...services.embedding import get_vector_db
+
+    try:
+        vector_db = get_vector_db()
+    except Exception as e:
+        with _bulk_sync_lock:
+            _bulk_sync_state["status"] = "failed"
+            _bulk_sync_state["error"] = str(e)
+        return
+
+    docs = list_md_files()
+    with _bulk_sync_lock:
+        _bulk_sync_state["total"] = len(docs)
+
+    synced = 0
+    failed = 0
+    for doc in docs:
+        try:
+            content_hash = compute_hash(doc.content)
+            vector_db.add_document(
+                doc_id=doc.id,
+                content=doc.content,
+                metadata={
+                    "title": doc.title,
+                    "category": doc.category or "",
+                    "source": doc.source or "",
+                    "content_hash": content_hash,
+                },
+            )
+            synced += 1
+        except Exception as e:
+            logger.error(f"문서 동기화 실패: {doc.id} - {e}")
+            failed += 1
+
+        with _bulk_sync_lock:
+            _bulk_sync_state["synced"] = synced
+            _bulk_sync_state["failed"] = failed
+
+    with _bulk_sync_lock:
+        _bulk_sync_state["status"] = "completed"
+
+
 @router.post("/sync")
 async def sync_documents(
     id: Optional[str] = Query(None, description="특정 문서 ID (없으면 전체 동기화)"),
+    background_tasks: BackgroundTasks = None,
 ):
-    """벡터 DB 동기화 (단일 또는 전체)"""
+    """벡터 DB 동기화 (단일: 즉시, 전체: 백그라운드)"""
     from ...services.embedding import get_vector_db
 
     try:
@@ -210,7 +267,7 @@ async def sync_documents(
         raise HTTPException(status_code=503, detail=f"벡터 DB 초기화 실패: {e}")
 
     if id:
-        # 단일 문서 동기화
+        # 단일 문서 동기화 (기존 동기 방식 유지)
         doc = read_md_file(id)
         if not doc:
             raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다")
@@ -235,28 +292,29 @@ async def sync_documents(
             "document": _doc_to_response(updated_doc) if updated_doc else None,
         }
     else:
-        # 전체 동기화
-        docs = list_md_files()
-        synced_count = 0
+        # 전체 동기화: 이미 실행 중이면 중복 방지
+        with _bulk_sync_lock:
+            if _bulk_sync_state["status"] == "running":
+                return {
+                    "message": "이미 일괄 동기화가 진행 중입니다",
+                    **_bulk_sync_state,
+                }
+            _bulk_sync_state["status"] = "running"
+            _bulk_sync_state["total"] = 0
+            _bulk_sync_state["synced"] = 0
+            _bulk_sync_state["failed"] = 0
+            _bulk_sync_state["started_at"] = time.time()
+            _bulk_sync_state.pop("error", None)
 
-        for doc in docs:
-            try:
-                content_hash = compute_hash(doc.content)
-                vector_db.add_document(
-                    doc_id=doc.id,
-                    content=doc.content,
-                    metadata={
-                        "title": doc.title,
-                        "category": doc.category or "",
-                        "source": doc.source or "",
-                        "content_hash": content_hash,
-                    },
-                )
-                synced_count += 1
-            except Exception as e:
-                logger.error(f"문서 동기화 실패: {doc.id} - {e}")
+        background_tasks.add_task(_run_bulk_sync)
+        return {"message": "일괄 동기화가 시작되었습니다", "status": "running"}
 
-        return {"synced": synced_count, "total": len(docs)}
+
+@router.get("/sync/status")
+async def get_sync_status():
+    """일괄 동기화 진행 상태 조회"""
+    with _bulk_sync_lock:
+        return dict(_bulk_sync_state)
 
 
 @router.post("/search")
