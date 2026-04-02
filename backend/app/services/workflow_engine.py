@@ -273,39 +273,52 @@ class WorkflowEngine:
         chain_visited: Set[str] = set()
 
         while chain_queue:
-            nid = chain_queue.pop(0)
-            if nid in chain_visited:
-                continue
+            progress_made = False
+            next_round = []
 
-            # 이 체인 내 의존성 확인 (체인 밖의 의존성은 이미 완료된 것으로 간주)
-            deps = self.incoming_edges[nid]
-            deps_ok = all(d in self.completed_nodes or d in chain_visited for d in deps)
-            if not deps_ok:
-                chain_queue.append(nid)
-                continue
+            while chain_queue:
+                nid = chain_queue.pop(0)
+                if nid in chain_visited:
+                    continue
 
-            chain_visited.add(nid)
-            self.completed_nodes.discard(nid)
-            await self._execute_node(nid, db)
-            self.completed_nodes.add(nid)
+                # 이 체인 내 의존성 확인 (체인 밖의 의존성은 이미 완료된 것으로 간주)
+                deps = self.incoming_edges[nid]
+                deps_ok = all(d in self.completed_nodes or d in chain_visited for d in deps)
+                if not deps_ok:
+                    next_round.append(nid)
+                    continue
 
-            # 중간 결과 커밋
-            self.execution.node_results = dict(self.node_results)
-            await db.commit()
+                progress_made = True
+                chain_visited.add(nid)
+                self.completed_nodes.discard(nid)
+                await self._execute_node(nid, db)
+                self.completed_nodes.add(nid)
 
-            # 다음 노드 라우팅
-            chain_node = self.nodes_by_id[nid]
-            if chain_node.definition_type == NodeDefType.SORTER:
-                # 분류기: matched handle에 맞는 연결만 통과
-                chain_result = self.belt_data.get(nid, {})
-                matched_handle = chain_result.get(BeltKey.SORTER_HANDLE, "default") if isinstance(chain_result, dict) else "default"
-                for conn in self.outgoing_connections[nid]:
-                    edge_handle = conn.source_handle or "default"
-                    if edge_handle == matched_handle:
-                        chain_queue.append(conn.target_node_id)
-            else:
-                for next_id in self.outgoing_edges[nid]:
-                    chain_queue.append(next_id)
+                # 중간 결과 커밋
+                self.execution.node_results = dict(self.node_results)
+                await db.commit()
+
+                # 다음 노드 라우팅
+                chain_node = self.nodes_by_id[nid]
+                if chain_node.definition_type == NodeDefType.SORTER:
+                    # 분류기: matched handle에 맞는 연결만 통과
+                    chain_result = self.belt_data.get(nid, {})
+                    matched_handle = chain_result.get(BeltKey.SORTER_HANDLE, "default") if isinstance(chain_result, dict) else "default"
+                    for conn in self.outgoing_connections[nid]:
+                        edge_handle = conn.source_handle or "default"
+                        if edge_handle == matched_handle:
+                            next_round.append(conn.target_node_id)
+                else:
+                    for next_id in self.outgoing_edges[nid]:
+                        next_round.append(next_id)
+
+            chain_queue = next_round
+            if not progress_made and chain_queue:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"downstream chain deadlock: {chain_queue} 노드의 의존성을 충족할 수 없습니다"
+                )
+                break
 
     async def _execute_node(self, node_id: str, db: AsyncSession) -> None:
         """단일 노드 실행"""
