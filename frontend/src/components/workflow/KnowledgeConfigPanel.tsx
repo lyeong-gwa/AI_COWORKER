@@ -9,7 +9,8 @@ interface UpstreamField {
 
 interface KnowledgeConfig {
   searchField?: string;
-  category?: string;
+  category?: string;   // legacy – kept for backward compatibility
+  categories?: string[];
   tags?: string[];
   maxResults?: number;
   matchCount?: number;
@@ -37,7 +38,8 @@ export function KnowledgeConfigPanel({
   onClose,
 }: KnowledgeConfigPanelProps) {
   const searchField = config.searchField || '';
-  const category = config.category || '';
+  // Backward compat: fall back to legacy single-string category
+  const selectedCategories = config.categories || (config.category ? [config.category] : []);
   const selectedTags = config.tags || [];
   const maxResults = config.maxResults ?? 5;
 
@@ -87,14 +89,19 @@ export function KnowledgeConfigPanel({
     return () => { cancelled = true; };
   }, []);
 
-  // Fetch matching documents when category or tags change (debounced)
+  // Fetch matching documents when selectedCategories or tags change (debounced)
   const fetchMatchingDocs = useCallback(() => {
     setDocsLoading(true);
-    knowledgeApi.list(category || undefined)
+    knowledgeApi.list(undefined)
       .then((docs) => {
         let filtered = docs;
+        if (selectedCategories.length > 0) {
+          filtered = filtered.filter((doc) =>
+            selectedCategories.includes(doc.category || '')
+          );
+        }
         if (selectedTags.length > 0) {
-          filtered = docs.filter((doc) =>
+          filtered = filtered.filter((doc) =>
             doc.tags?.some((t) => selectedTags.includes(t))
           );
         }
@@ -109,7 +116,7 @@ export function KnowledgeConfigPanel({
         setDocsLoading(false);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, selectedTags.join(',')]);
+  }, [selectedCategories.join(','), selectedTags.join(',')]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -127,8 +134,11 @@ export function KnowledgeConfigPanel({
     onUpdateConfig({ ...config, searchField: newValue });
   };
 
-  const handleCategoryChange = (newCategory: string) => {
-    onUpdateConfig({ ...config, category: newCategory });
+  const handleCategoryToggle = (cat: string) => {
+    const newCategories = selectedCategories.includes(cat)
+      ? selectedCategories.filter((c) => c !== cat)
+      : [...selectedCategories, cat];
+    onUpdateConfig({ ...config, categories: newCategories });
   };
 
   const handleTagToggle = (tag: string) => {
@@ -258,19 +268,79 @@ export function KnowledgeConfigPanel({
         {/* Category filter */}
         <div>
           <label className="block text-xs text-gray-400 mb-1.5">카테고리 필터</label>
+
           {metaLoading ? (
-            <Skeleton className="h-9 w-full" />
+            <div className="space-y-2">
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-6 w-3/4" />
+            </div>
           ) : (
-            <select
-              value={category}
-              onChange={(e) => handleCategoryChange(e.target.value)}
-              className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-              <option value="">전체 카테고리</option>
-              {categories.map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
+            <>
+              {/* Selected category badges */}
+              {selectedCategories.length > 0 && (
+                <div className="flex flex-wrap gap-1 mb-2 max-h-16 overflow-y-auto">
+                  {selectedCategories.map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => handleCategoryToggle(cat)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-600/40 text-indigo-200 border border-indigo-500/50 rounded text-[11px] hover:bg-indigo-600/60 transition-colors"
+                    >
+                      {cat}
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Category checkbox list */}
+              {categories.length === 0 ? (
+                <div className="bg-gray-900 rounded-lg p-3 text-center">
+                  <p className="text-gray-500 text-xs">등록된 카테고리가 없습니다</p>
+                </div>
+              ) : (
+                <div className="max-h-48 overflow-y-auto bg-gray-900 border border-gray-600 rounded-lg p-2 space-y-0.5 custom-scrollbar">
+                  {categories.map((cat) => {
+                    const isChecked = selectedCategories.includes(cat);
+                    return (
+                      <label
+                        key={cat}
+                        className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors text-xs ${
+                          isChecked
+                            ? 'bg-indigo-900/30 text-indigo-200'
+                            : 'text-gray-300 hover:bg-gray-800'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => handleCategoryToggle(cat)}
+                          className="sr-only"
+                        />
+                        <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
+                          isChecked
+                            ? 'bg-indigo-500 border-indigo-400'
+                            : 'border-gray-500 bg-transparent'
+                        }`}>
+                          {isChecked && (
+                            <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </div>
+                        <span className="truncate">{cat}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
+              <p className="text-[10px] text-gray-500 mt-1.5">
+                선택하지 않으면 전체 카테고리에서 검색합니다
+              </p>
+            </>
           )}
         </div>
 

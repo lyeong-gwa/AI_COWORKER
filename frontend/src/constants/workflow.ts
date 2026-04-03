@@ -19,6 +19,7 @@ export const DEF_TYPE = {
   API_START: 'api-start',
   // AI
   AI_CUSTOM: 'ai-custom',
+  AI_API_ROUTER: 'ai-api-router',
   // 로직
   SORTER: 'sorter',
   UNPACKER: 'unpacker',
@@ -60,6 +61,9 @@ export const STATIC_OUTPUT_FIELDS: Record<string, { name: string; type: string }
     { name: 'data', type: 'object' },
   ],
   [DEF_TYPE.KNOWLEDGE]: [{ name: 'knowledge', type: 'array' }],
+  [DEF_TYPE.AI_API_ROUTER]: [
+    { name: 'api_route', type: 'object' },
+  ],
 };
 
 /** 벨트 필드 매핑 접두사 */

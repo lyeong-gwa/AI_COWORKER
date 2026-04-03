@@ -21,7 +21,12 @@ class KnowledgeHandler(NodeHandler):
     ) -> Any:
         config = node.config or {}
         search_field = config.get('searchField', '')
-        category = config.get('category', '')
+        # Support new multi-category format with backward compat for single category
+        categories = config.get('categories', [])
+        if not categories:
+            old_cat = config.get('category', '')
+            if old_cat:
+                categories = [old_cat]
         tags = config.get('tags', [])
         max_results = min(
             KNOWLEDGE_MAX_RESULTS,
@@ -44,8 +49,8 @@ class KnowledgeHandler(NodeHandler):
 
         if not query:
             # 카테고리가 설정된 경우, 카테고리명으로 검색 (전체 카테고리 문서 조회)
-            if category:
-                query = category
+            if categories:
+                query = ' '.join(categories)
             else:
                 return {'knowledge': [], BeltKey.KNOWLEDGE_ERROR: '검색 쿼리를 추출할 수 없습니다'}
 
@@ -57,8 +62,11 @@ class KnowledgeHandler(NodeHandler):
 
             # ChromaDB 필터 구성
             where_filter = None
-            if category:
-                where_filter = {'category': category}
+            if categories:
+                if len(categories) == 1:
+                    where_filter = {'category': categories[0]}
+                else:
+                    where_filter = {'category': {'$in': categories}}
 
             # 검색 실행
             results = vector_db.search(
@@ -90,8 +98,8 @@ class KnowledgeHandler(NodeHandler):
 
             # 지식 검색 결과 + 카테고리 반환 (입력 데이터는 _passthrough로 프레임워크가 처리)
             result = {'knowledge': knowledge_items}
-            if category:
-                result['search_category'] = category
+            if categories:
+                result['search_categories'] = categories
             return result
 
         except Exception as e:

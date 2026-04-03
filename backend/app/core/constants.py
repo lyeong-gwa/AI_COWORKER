@@ -25,6 +25,7 @@ class NodeDefType(str, Enum):
     AI_CLASSIFY = "ai-classify"
     AI_EXTRACT = "ai-extract"
     AI_SUMMARIZE = "ai-summarize"
+    AI_API_ROUTER = "ai-api-router"
 
     # 로직
     CONDITION = "condition"
@@ -77,6 +78,7 @@ AI_NODE_TYPES = {
     NodeDefType.AI_EXTRACT,
     NodeDefType.AI_SUMMARIZE,
     NodeDefType.AI_CUSTOM,
+    NodeDefType.AI_API_ROUTER,
 }
 
 # AI 타입 문자열 집합

@@ -11,6 +11,8 @@ import { UnpackerNode } from '../components/workflow/UnpackerNode';
 import { MapperNode } from '../components/workflow/MapperNode';
 import { KnowledgeNode } from '../components/workflow/KnowledgeNode';
 import { MarkdownViewerNode } from '../components/workflow/MarkdownViewerNode';
+import { AiApiRouterNode } from '../components/workflow/AiApiRouterNode';
+import { AiApiRouterConfigPanel } from '../components/workflow/AiApiRouterConfigPanel';
 
 // 설정 패널 컴포넌트 import
 import { FormStartConfigPanel } from '../components/workflow/FormStartConfigPanel';
@@ -117,6 +119,42 @@ nodeRegistry.register({
       inputMapping: {},
     },
   }),
+});
+
+nodeRegistry.register({
+  defType: DEF_TYPE.AI_API_ROUTER,
+  category: 'action',
+  reactFlowType: 'aiApiRouterNode',
+  component: AiApiRouterNode,
+  minimapColor: '#7c3aed',
+  panelBehavior: { onClick: 'config' },
+  configPanel: AiApiRouterConfigPanel as any,
+  palette: {
+    icon: '🤖',
+    label: 'AI API 라우터',
+    description: 'AI가 판단하여 적절한 API 자동 호출',
+    bg: 'from-purple-700 to-purple-900',
+    border: 'border-purple-500',
+    textColor: 'text-purple-100',
+    descColor: 'text-purple-300/60',
+    dragType: 'application/systemnode',
+  },
+  createNodeData: (id, position) => ({
+    id,
+    type: 'aiApiRouterNode',
+    position,
+    data: {
+      nodeId: DEF_TYPE.AI_API_ROUTER,
+      instanceName: 'AI API 라우터',
+      definitionType: DEF_TYPE.AI_API_ROUTER,
+      config: {},
+      inputMapping: {},
+    },
+  }),
+  defaultData: (inst) => ({ config: inst.config || {} }),
+  staticOutputFields: [
+    { name: 'api_route', type: 'object' },
+  ],
 });
 
 // --- Logic ---
