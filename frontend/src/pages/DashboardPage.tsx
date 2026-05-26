@@ -1,366 +1,325 @@
-import { useState, useEffect, useCallback } from 'react';
+/**
+ * Dashboard Page — 실행현황 요약 + 워크플로우 카드 그리드
+ *
+ * Phase 3b 재구성 산출물. Phase 4c에서 집계 API 교체.
+ * - 상단: 4종 요약 카드 (오늘 실행 / 진행 중 / 실패 / 성공)
+ * - 하단: 워크플로우 카드 그리드 (뷰어 + 실행 진입점)
+ *
+ * 쓰기는 허용하지 않는다. 편집·생성은 모두 CLI로 이관되었다.
+ * Phase 4c: GET /api/v1/dashboard/summary 단일 호출로 N+1 제거.
+ */
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { dashboardApi, type DashboardWorkflowSummary } from '../services/api';
+import { StatusBadge } from '../components/common/StatusBadge';
+import { EmptyState } from '../components/common/EmptyState';
 import { useToast } from '../components/common/Toast';
-import { exportImportApi, type ImportResult } from '../services/api';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Local types ─────────────────────────────────────────────
 
-function downloadJson(data: unknown, filename: string) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+interface SummaryStats {
+  today: number;
+  inProgress: number;
+  failed: number;
+  succeeded: number;
 }
 
-function todayStr() {
-  return new Date().toISOString().slice(0, 10).replace(/-/g, '');
+type WorkflowCardData = DashboardWorkflowSummary;
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+const RECENT_DAYS = 7; // 요약 카드 description 표시용
+
+function formatRelative(iso?: string | null): string {
+  if (!iso) return '실행 이력 없음';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return '방금 전';
+  if (mins < 60) return `${mins}분 전`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}시간 전`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}일 전`;
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function resultSummary(r: ImportResult) {
-  const parts: string[] = [];
-  if (r.created) parts.push(`${r.created}개 생성`);
-  if (r.updated) parts.push(`${r.updated}개 업데이트`);
-  if (r.skipped) parts.push(`${r.skipped}개 건너뜀`);
-  return parts.length ? parts.join(', ') : '변경 없음';
+// ─── Summary Card ────────────────────────────────────────────
+
+interface SummaryCardProps {
+  label: string;
+  value: number;
+  tone: 'sky' | 'amber' | 'rose' | 'emerald';
+  description?: string;
+  onClick?: () => void;
 }
 
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-const TYPE_LABELS: Record<string, string> = {
-  workflows: '워크플로우',
-  nodes: 'AI 노드',
-  'api-definitions': 'API 정의',
-  knowledge: '지식 베이스',
+const TONE_MAP: Record<SummaryCardProps['tone'], { bar: string; glow: string; num: string; hover: string }> = {
+  sky: {
+    bar: 'bg-sky-500',
+    glow: 'shadow-[0_0_24px_rgba(56,189,248,0.15)]',
+    num: 'text-sky-100',
+    hover: 'hover:border-sky-500/60',
+  },
+  amber: {
+    bar: 'bg-amber-500',
+    glow: 'shadow-[0_0_24px_rgba(245,158,11,0.15)]',
+    num: 'text-amber-100',
+    hover: 'hover:border-amber-500/60',
+  },
+  rose: {
+    bar: 'bg-rose-500',
+    glow: 'shadow-[0_0_24px_rgba(244,63,94,0.18)]',
+    num: 'text-rose-100',
+    hover: 'hover:border-rose-500/60',
+  },
+  emerald: {
+    bar: 'bg-emerald-500',
+    glow: 'shadow-[0_0_24px_rgba(16,185,129,0.15)]',
+    num: 'text-emerald-100',
+    hover: 'hover:border-emerald-500/60',
+  },
 };
 
-// ─── Card ─────────────────────────────────────────────────────────────────────
-
-interface CardProps {
-  icon: string;
-  title: string;
-  subtitle?: string;
-  onExport: () => Promise<void>;
-  onImport: () => void;
-}
-
-function DataCard({ icon, title, subtitle, onExport, onImport }: CardProps) {
-  const [exporting, setExporting] = useState(false);
-
-  async function handleExport() {
-    setExporting(true);
-    try {
-      await onExport();
-    } finally {
-      setExporting(false);
-    }
-  }
-
+function SummaryCard({ label, value, tone, description, onClick }: SummaryCardProps) {
+  const t = TONE_MAP[tone];
   return (
-    <div className="bg-gray-800 border border-gray-700 rounded-xl p-6 flex flex-col gap-4">
-      <div className="flex items-start gap-3">
-        <span className="text-3xl leading-none">{icon}</span>
-        <div>
-          <h2 className="text-lg font-semibold text-white">{title}</h2>
-          {subtitle && (
-            <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>
-          )}
-        </div>
+    <button
+      onClick={onClick}
+      disabled={!onClick}
+      className={`group relative text-left rounded-xl bg-slate-900/60 border border-slate-800 px-5 py-4 transition-all duration-200 ${t.hover} ${onClick ? 'cursor-pointer hover:bg-slate-900/90 ' + t.glow : 'cursor-default'}`}
+    >
+      {/* Accent bar */}
+      <div className={`absolute top-0 left-0 h-[3px] w-10 rounded-br ${t.bar}`} />
+
+      <div className="flex items-baseline justify-between mb-1">
+        <span className="text-[10px] font-mono tracking-[0.2em] uppercase text-slate-500">
+          {label}
+        </span>
+        <span className="text-[10px] text-slate-600 font-mono">
+          {description}
+        </span>
       </div>
 
-      <div className="flex gap-3 mt-auto">
-        <button
-          onClick={handleExport}
-          disabled={exporting}
-          className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg
-                     bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:opacity-60
-                     text-white text-sm font-medium transition-colors"
-        >
-          {exporting ? (
-            <>
-              <span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              내보내는 중...
-            </>
-          ) : (
-            <>
-              <span>↓</span>
-              내보내기
-            </>
-          )}
-        </button>
-
-        <button
-          onClick={onImport}
-          className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg
-                     bg-emerald-600 hover:bg-emerald-500
-                     text-white text-sm font-medium transition-colors"
-        >
-          <span>↑</span>
-          가져오기
-        </button>
+      <div className={`font-light tabular-nums text-4xl ${t.num} leading-none mt-2`}>
+        {value.toLocaleString()}
       </div>
-    </div>
+    </button>
   );
 }
 
-// ─── Local File Picker Modal ─────────────────────────────────────────────────
+// ─── Workflow Card ───────────────────────────────────────────
 
-interface LocalFile {
-  name: string;
-  size: number;
-  modifiedAt: number;
+interface WorkflowCardProps {
+  workflow: WorkflowCardData;
+  onRun: () => void;
 }
 
-function LocalFilePickerModal({
-  onClose,
-  onImported,
-  filterKeyword,
-}: {
-  onClose: () => void;
-  onImported: (type: string, result: ImportResult) => void;
-  filterKeyword?: string;
-}) {
-  const [files, setFiles] = useState<LocalFile[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [importing, setImporting] = useState<string | null>(null);
-  const { toast } = useToast();
-
-  const fetchFiles = useCallback(async () => {
-    setLoading(true);
-    try {
-      let all = await exportImportApi.listLocalFiles();
-      if (filterKeyword) {
-        all = all.filter((f) => f.name.toLowerCase().includes(filterKeyword.toLowerCase()));
-      }
-      setFiles(all);
-    } catch {
-      toast.error('파일 목록을 불러올 수 없습니다');
-    } finally {
-      setLoading(false);
-    }
-  }, [filterKeyword, toast]);
-
-  useEffect(() => {
-    fetchFiles();
-  }, [fetchFiles]);
-
-  async function handleImport(filename: string) {
-    setImporting(filename);
-    try {
-      const result = await exportImportApi.importLocalFile(filename);
-      const typeLabel = TYPE_LABELS[result.type] || result.type;
-      toast.success(`${typeLabel} 가져오기 완료 — ${resultSummary(result)}`);
-      onImported(result.type, result);
-      onClose();
-    } catch (e: unknown) {
-      toast.error(`가져오기 실패: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setImporting(null);
-    }
-  }
-
+function WorkflowCard({ workflow, onRun }: WorkflowCardProps) {
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div
-        className="bg-gray-800 border border-gray-700 rounded-xl w-full max-w-lg max-h-[70vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
+    <div className="group relative flex flex-col rounded-xl bg-gradient-to-b from-slate-900/80 to-slate-900/40 border border-slate-800 hover:border-slate-700 transition-all duration-200 overflow-hidden">
+      {/* Hover accent */}
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-sky-500/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+
+      {/* Body */}
+      <Link
+        to={`/workflows/${workflow.id}`}
+        className="flex-1 p-5 flex flex-col gap-3 min-w-0"
       >
-        {/* Header */}
-        <div className="px-5 py-4 border-b border-gray-700 flex items-center justify-between">
-          <div>
-            <h3 className="text-white font-semibold">서버 파일에서 가져오기</h3>
-            <p className="text-xs text-gray-400 mt-0.5">
-              backend/data/download/ 에 JSON 파일을 배치하세요
-            </p>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl px-1">
-            ✕
-          </button>
+        {/* Status & ID */}
+        <div className="flex items-center justify-between gap-2">
+          <StatusBadge status={workflow.status} variant="workflow" size="xs" />
+          <span className="text-[10px] font-mono text-slate-600 truncate">
+            {workflow.id}
+          </span>
         </div>
 
-        {/* File list */}
-        <div className="flex-1 overflow-auto p-4 space-y-2">
-          {loading ? (
-            <div className="flex items-center justify-center py-10">
-              <div className="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
-            </div>
-          ) : files.length === 0 ? (
-            <div className="text-center py-10">
-              <div className="text-3xl mb-2">📂</div>
-              <p className="text-gray-500 text-sm">JSON 파일이 없습니다</p>
-              <p className="text-gray-600 text-xs mt-1">
-                backend/data/download/ 폴더에 JSON 파일을 넣어주세요
-              </p>
-            </div>
-          ) : (
-            files.map((f) => (
-              <div
-                key={f.name}
-                className="bg-gray-900 rounded-lg border border-gray-700 px-4 py-3 flex items-center justify-between hover:border-gray-600 transition-colors"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="text-lg">📄</span>
-                  <div className="min-w-0">
-                    <div className="text-sm text-gray-200 font-mono truncate">{f.name}</div>
-                    <div className="text-[10px] text-gray-500">
-                      {formatBytes(f.size)} · {new Date(f.modifiedAt * 1000).toLocaleString('ko-KR')}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleImport(f.name)}
-                  disabled={importing !== null}
-                  className="flex-shrink-0 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500
-                             disabled:bg-emerald-800 disabled:opacity-60
-                             text-white text-xs font-medium transition-colors"
-                >
-                  {importing === f.name ? (
-                    <span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    '가져오기'
-                  )}
-                </button>
-              </div>
-            ))
-          )}
+        {/* Title */}
+        <div className="min-w-0">
+          <h3 className="text-slate-100 font-semibold text-[15px] leading-snug truncate">
+            {workflow.name}
+          </h3>
+          <p className="text-slate-400 text-xs mt-1 line-clamp-2 min-h-[2em]">
+            {workflow.description || '설명 없음'}
+          </p>
         </div>
 
-        {/* Footer */}
-        <div className="px-5 py-3 border-t border-gray-700 flex justify-between items-center">
-          <button
-            onClick={fetchFiles}
-            className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
-          >
-            🔄 새로고침
-          </button>
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors"
-          >
-            닫기
-          </button>
+        {/* Meta row */}
+        <div className="flex items-center gap-3 text-[11px] text-slate-500 font-mono mt-auto pt-2 border-t border-slate-800/60">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-1 h-1 rounded-full bg-slate-500" />
+            노드 {workflow.nodeCount}
+          </span>
+          <span className="text-slate-600">·</span>
+          <span>{formatRelative(workflow.latestInstance?.createdAt ?? workflow.updatedAt)}</span>
         </div>
-      </div>
+      </Link>
+
+      {/* Run button */}
+      <button
+        onClick={onRun}
+        disabled={workflow.status !== 'active'}
+        className="block w-full px-5 py-3 bg-slate-950/80 border-t border-slate-800 text-left text-sm font-medium transition-colors disabled:text-slate-600 disabled:cursor-not-allowed enabled:text-sky-300 enabled:hover:bg-sky-950/40 enabled:hover:text-sky-200"
+      >
+        <span className="font-mono text-xs tracking-wider">▶ 실행하기</span>
+      </button>
     </div>
   );
 }
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
+// ─── Page ────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const { toast } = useToast();
-  const [importModal, setImportModal] = useState<{ filter?: string } | null>(null);
+  const [workflows, setWorkflows] = useState<WorkflowCardData[]>([]);
+  const [stats, setStats] = useState<SummaryStats>({
+    today: 0,
+    inProgress: 0,
+    failed: 0,
+    succeeded: 0,
+  });
+  const [loading, setLoading] = useState(true);
 
-  // Export handlers
-  async function exportKnowledge() {
-    try {
-      const data = await exportImportApi.exportKnowledge();
-      downloadJson(data, `knowledge_${todayStr()}.json`);
-      toast.success(`지식 베이스 ${data.length}개 내보내기 완료`);
-    } catch (e: unknown) {
-      toast.error(`내보내기 실패: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        // Phase 4c: 단일 집계 엔드포인트 — N+1 listInstances 호출 제거.
+        const summary = await dashboardApi.getSummary();
 
-  async function exportNodes() {
-    try {
-      const data = await exportImportApi.exportNodes();
-      downloadJson(data, `nodes_${todayStr()}.json`);
-      toast.success(`AI 노드 ${data.length}개 내보내기 완료`);
-    } catch (e: unknown) {
-      toast.error(`내보내기 실패: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
+        if (cancelled) return;
 
-  async function exportApiDefs() {
-    try {
-      const data = await exportImportApi.exportApiDefinitions();
-      downloadJson(data, `api_definitions_${todayStr()}.json`);
-      toast.success(`API 정의 ${data.length}개 내보내기 완료`);
-    } catch (e: unknown) {
-      toast.error(`내보내기 실패: ${e instanceof Error ? e.message : String(e)}`);
+        setStats({
+          today: summary.counts.todayRuns,
+          inProgress: summary.counts.inProgress,
+          failed: summary.counts.failed,
+          succeeded: summary.counts.completed,
+        });
+        setWorkflows(summary.workflows);
+      } catch (e) {
+        toast.error(`대시보드 로드 실패: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
-  }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [toast]);
 
-  async function exportWorkflows() {
-    try {
-      const data = await exportImportApi.exportAllWorkflows();
-      downloadJson(data, `workflows_${todayStr()}.json`);
-      toast.success(`워크플로우 ${data.length}개 내보내기 완료`);
-    } catch (e: unknown) {
-      toast.error(`내보내기 실패: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
+  const sortedWorkflows = useMemo(() => {
+    // 활성 먼저, 그다음 최근 실행(latestInstance.createdAt) 순
+    return [...workflows].sort((a, b) => {
+      if (a.status !== b.status) {
+        if (a.status === 'active') return -1;
+        if (b.status === 'active') return 1;
+      }
+      const at = new Date(a.latestInstance?.createdAt ?? a.updatedAt).getTime();
+      const bt = new Date(b.latestInstance?.createdAt ?? b.updatedAt).getTime();
+      return bt - at;
+    });
+  }, [workflows]);
 
   return (
-    <div className="h-full overflow-auto bg-gray-900 p-6">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white">데이터 관리</h1>
-        <p className="text-gray-400 mt-1 text-sm">
-          각 데이터 유형을 JSON 파일로 내보내거나 가져올 수 있습니다.
-        </p>
-        <p className="text-gray-500 mt-0.5 text-xs">
-          가져오기: backend/data/download/ 폴더에 JSON 파일을 배치한 후 가져오기 버튼을 누르세요.
-        </p>
-      </div>
+    <div className="h-full overflow-auto bg-slate-950">
+      <div className="w-full px-6 py-8">
+        {/* Header */}
+        <header className="mb-8 flex items-baseline justify-between gap-4">
+          <div>
+            <div className="text-[11px] font-mono tracking-[0.25em] uppercase text-slate-500 mb-2">
+              업무자동화 · 관제실
+            </div>
+            <h1 className="text-3xl font-light text-slate-50 tracking-tight">
+              실행 현황 <span className="text-slate-600">/</span>
+              <span className="text-slate-300 ml-2 font-normal">Overview</span>
+            </h1>
+          </div>
+          <Link
+            to="/workflows"
+            className="text-xs font-mono text-sky-400 hover:text-sky-300 tracking-wider uppercase transition-colors"
+          >
+            전체 목록 →
+          </Link>
+        </header>
 
-      {/* 2×2 Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 max-w-3xl">
-        <DataCard
-          icon="📚"
-          title="지식 베이스"
-          subtitle="RAG에 사용되는 문서 및 텍스트 데이터"
-          onExport={exportKnowledge}
-          onImport={() => setImportModal({ filter: 'knowledge' })}
-        />
-        <DataCard
-          icon="🤖"
-          title="AI 노드"
-          subtitle="시스템 프롬프트 및 노드 설정 데이터"
-          onExport={exportNodes}
-          onImport={() => setImportModal({ filter: 'node' })}
-        />
-        <DataCard
-          icon="🌐"
-          title="API 정의"
-          subtitle="외부 API 연결 스펙 및 파라미터 정의"
-          onExport={exportApiDefs}
-          onImport={() => setImportModal({ filter: 'api' })}
-        />
-        <DataCard
-          icon="⚙️"
-          title="워크플로우"
-          subtitle="의존성(노드 / API / 지식) 포함 전체 내보내기"
-          onExport={exportWorkflows}
-          onImport={() => setImportModal({ filter: 'workflow' })}
-        />
-      </div>
+        {/* Summary cards */}
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-10">
+          <SummaryCard
+            label="오늘 실행"
+            value={stats.today}
+            tone="sky"
+            description="TODAY"
+            onClick={() => navigate('/workflows')}
+          />
+          <SummaryCard
+            label="진행 중"
+            value={stats.inProgress}
+            tone="amber"
+            description="ACTIVE"
+          />
+          <SummaryCard
+            label="최근 실패"
+            value={stats.failed}
+            tone="rose"
+            description={`${RECENT_DAYS}D`}
+          />
+          <SummaryCard
+            label="최근 성공"
+            value={stats.succeeded}
+            tone="emerald"
+            description={`${RECENT_DAYS}D`}
+          />
+        </section>
 
-      {/* 전체 파일 가져오기 버튼 */}
-      <div className="mt-6 max-w-3xl">
-        <button
-          onClick={() => setImportModal({})}
-          className="w-full py-3 border border-dashed border-gray-600 text-gray-400 text-sm rounded-xl
-                     hover:bg-gray-800 hover:border-gray-500 hover:text-gray-300 transition-colors"
-        >
-          📂 전체 파일 목록에서 가져오기
-        </button>
-      </div>
+        {/* Workflow grid */}
+        <section>
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-sm font-mono tracking-[0.2em] uppercase text-slate-400">
+              업무자동화 목록
+            </h2>
+            <span className="text-xs font-mono text-slate-600">
+              {loading ? '로딩...' : `${workflows.length}개`}
+            </span>
+          </div>
 
-      {/* Import Modal */}
-      {importModal && (
-        <LocalFilePickerModal
-          filterKeyword={importModal.filter}
-          onClose={() => setImportModal(null)}
-          onImported={() => {}}
-        />
-      )}
+          {loading ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-48 rounded-xl bg-slate-900/40 border border-slate-800 animate-pulse"
+                />
+              ))}
+            </div>
+          ) : sortedWorkflows.length === 0 ? (
+            <EmptyState
+              icon={'∅'}
+              title="아직 등록된 업무자동화가 없습니다"
+              description={
+                <>
+                  업무자동화의 생성·수정·삭제는 CLI(Claude Code 등)를 통해서만 가능합니다.
+                  <br />
+                  프로젝트 <code className="px-1 text-sky-300">CLAUDE.md</code>를 참고하세요.
+                </>
+              }
+              hint={<span>curl -X POST http://localhost:8002/api/v1/workflows</span>}
+            />
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {sortedWorkflows.map((wf) => (
+                <WorkflowCard
+                  key={wf.id}
+                  workflow={wf}
+                  onRun={() => navigate(`/workflows/${wf.id}?run=1`)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

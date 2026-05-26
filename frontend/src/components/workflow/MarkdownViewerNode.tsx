@@ -46,6 +46,7 @@ function MarkdownViewerNodeInner({ data, selected, id }: { data: MarkdownViewerN
     <div className={`bg-gradient-to-b ${isInvalidTarget ? 'from-red-800/80 to-red-900/80 border-red-500' : execBorder ? `from-indigo-700 to-indigo-900 ${execBorder}` : 'from-indigo-700 to-indigo-900 border-indigo-400'} border-2 rounded-xl shadow-2xl min-w-[200px] transition-all ${selected ? 'ring-2 ring-indigo-300 ring-offset-2 ring-offset-gray-900 scale-105' : ''}${isInvalidTarget && !execStatus ? ' animate-pulse' : ''}`}>
       {/* Input Handle */}
       <Handle type="target" position={Position.Left} id="input" style={{ background: '#312e81', border: '3px solid #818cf8', width: 16, height: 16, top: '50%' }} title="입력" />
+      <Handle type="source" position={Position.Right} id="output" style={{ background: '#312e81', border: '3px solid #818cf8', width: 16, height: 16, top: '50%' }} title="출력 (패스스루)" />
 
       {/* Header */}
       <div className="px-4 py-3 border-b border-white/10">

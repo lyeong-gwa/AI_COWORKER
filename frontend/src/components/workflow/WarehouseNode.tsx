@@ -4,6 +4,7 @@ import { factoryApi } from '../../services/api';
 import { ConnectionDragContext } from './FactoryNode';
 import { NodeOutputPill } from './NodeOutputPill';
 import { ExecutionStatusBadge } from './ExecutionStatusBadge';
+import { InstanceExecutionContext } from '../../contexts/InstanceExecutionContext';
 
 export interface WarehouseNodeData extends Record<string, unknown> {
   nodeId: string;
@@ -31,13 +32,20 @@ function WarehouseNodeInner({ data, selected, id }: { data: WarehouseNodeData; s
         ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
         : '';
 
-  // Fetch warehouse count on mount and periodically
+  // Fetch warehouse count on mount and periodically.
+  // When running inside InstanceDetailPage, use executionId filter so the
+  // count matches the current execution's results (not accumulated total).
+  const executionCtx = useContext(InstanceExecutionContext);
+
   useEffect(() => {
     let mounted = true;
 
     const fetchCount = async () => {
       try {
-        const result = await factoryApi.getWarehouse(id, 1);
+        const opts = executionCtx?.executionId
+          ? { limit: 1, executionId: executionCtx.executionId }
+          : 1;
+        const result = await factoryApi.getWarehouse(id, opts);
         if (mounted) setItemCount(result.total);
       } catch {
         // Ignore errors - warehouse may not have data yet
@@ -51,7 +59,7 @@ function WarehouseNodeInner({ data, selected, id }: { data: WarehouseNodeData; s
       mounted = false;
       clearInterval(interval);
     };
-  }, [id]);
+  }, [id, executionCtx?.executionId]);
 
   return (
     <div

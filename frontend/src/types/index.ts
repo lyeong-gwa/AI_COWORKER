@@ -3,17 +3,86 @@
 // 문서 1개 = 청크 1개 (1:1 매핑)
 // ============================================
 
+// Karpathy v2: 5종 page_type enum
+export type PageType = 'Summary' | 'Entity' | 'Concept' | 'Comparison' | 'Synthesis';
+
 export interface KnowledgeDocument {
   id: string;
   title: string;
   content: string;
   source?: string;
   category: string;
+  service: string;
   tags: string[];
+  // Karpathy v2 신규 필드
+  pageType?: PageType;
+  version?: number;
+  links?: string[];
+  rawSourceId?: string | null;
   contentHash?: string;
   syncStatus: 'synced' | 'modified' | 'not_synced';
   createdAt: string;
   updatedAt: string;
+}
+
+// Multi-service 확장 (Phase 3)
+export interface KnowledgeService {
+  id: string;
+  title: string;
+  description: string;
+}
+
+// Karpathy v2: 그래프 응답
+export interface KnowledgeGraphNode {
+  id: string;
+  title: string;
+  pageType: PageType;
+  category: string;
+  service: string;
+  backlinks_count?: number;
+}
+
+export interface KnowledgeGraphEdge {
+  from: string;
+  to: string;
+  is_broken?: boolean;
+  crossService?: boolean;
+}
+
+export interface KnowledgeGraphResponse {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+}
+
+// Karpathy v2: Lint 보고서 (백엔드 실제 응답 shape)
+export interface LintReport {
+  report_path: string;
+  history_path?: string;
+  summary: {
+    // 백엔드가 실제 반환하는 필드명
+    errors?: number;
+    warnings?: number;
+    info?: number;
+    llm_calls?: number;
+    estimated_cost_usd?: number;
+    // 계획서 기준 필드명 (alias)
+    error_count?: number;
+    warning_count?: number;
+    info_count?: number;
+  };
+  // 섹션별 항목 배열
+  duplicates?: unknown[];
+  contradictions?: unknown[];
+  orphans?: unknown[];
+  outdated?: unknown[];
+  broken_links?: unknown[];
+  schema_violations?: unknown[];
+  report_markdown?: string;
+}
+
+// Karpathy v2: Index rebuild 응답
+export interface IndexRebuildResponse {
+  rebuilt: string[];
 }
 
 // ============================================
@@ -99,11 +168,6 @@ export interface AINode {
 // Workflow Types (AI 노드 기반)
 // ============================================
 
-export interface Position {
-  x: number;
-  y: number;
-}
-
 // 워크플로우 내 노드 인스턴스
 export interface WorkflowNodeInstance {
   id: string;                     // 인스턴스 ID
@@ -111,7 +175,7 @@ export interface WorkflowNodeInstance {
   definitionType?: string;        // "ai-custom" | "manual" | "schedule" | "form"
   aiNodeId?: string;              // AINode reference ID
   name: string;                   // 인스턴스 이름 (기본값: AINode.name)
-  position: Position;
+  orderIndex?: number;            // 형제 노드 안정 순번 (자동 레이아웃 tie-break)
 
   // 노드별 설정 (JSON) — 분류기 규칙 등
   config?: Record<string, unknown>;
@@ -164,6 +228,7 @@ export interface Workflow {
 
   // 메타데이터
   tags: string[];
+  createdBy?: string;              // 'cli' | 'web'
   createdAt: string;
   updatedAt: string;
 }
@@ -227,18 +292,27 @@ export interface NodeExecutionLog {
 }
 
 export interface NodeExecutionResult {
-  nodeInstanceId: string;
-  status: ExecutionStatus;
+  nodeInstanceId?: string;
+  status?: ExecutionStatus | string;
+  /** legacy 키 (input). 백엔드는 inputData/outputData 를 보내므로 양쪽 모두 호환 */
   input?: unknown;
   output?: unknown;
+  /** 백엔드 응답 표준 키 (warehouse.py 응답 변환) */
+  inputData?: unknown;
+  outputData?: unknown;
+  /** 백엔드 응답에 포함된 노드 정의 타입 (예: 'ai-custom') */
+  definitionType?: string;
   llmResponse?: {
     rawResponse: string;
     parsedOutput: unknown;
     tokensUsed: number;
   };
-  logs: NodeExecutionLog[];
+  logs?: NodeExecutionLog[];
+  /** 백엔드는 startTime/endTime 으로 보냄 — 양쪽 모두 호환 */
   startedAt?: string;
   completedAt?: string;
+  startTime?: string;
+  endTime?: string;
   error?: string;
 }
 
@@ -247,7 +321,12 @@ export interface WorkflowExecution {
   workflowId: string;
   status: ExecutionStatus;
   triggerInput?: unknown;
-  nodeResults: NodeExecutionResult[];
+  /**
+   * P-1 / C-1 정정: backend `app/models/workflow.py:192` 는 `Mapped[Dict[str, Any]]`,
+   * 응답 변환 `app/api/routes/warehouse.py:98` 도 dict 그대로 반환한다.
+   * 이전 `NodeExecutionResult[]` (배열) 은 잘못된 타입이었음.
+   */
+  nodeResults: Record<string, NodeExecutionResult>;
   finalOutput?: unknown;
   startedAt: string;
   completedAt?: string;
@@ -379,7 +458,7 @@ export interface WorkflowNode {
   id: string;
   definitionType: string;
   name: string;
-  position: Position;
+  orderIndex?: number;
   config: Record<string, unknown>;
   branches?: ConditionBranch[];
 }
@@ -474,3 +553,50 @@ export interface CreateApiDefinitionData {
 }
 
 export type UpdateApiDefinitionData = Partial<CreateApiDefinitionData> & { isActive?: boolean };
+
+// ─── InstanceDB (Phase A: 1급 자원 — 동질 record 컬렉션) ─────────────────────
+//
+// 지식문서가 사람이 RAG용으로 등록하는 컬렉션이라면, 인스턴스DB는 워크플로우가
+// 자동 누적하는 동질 데이터셋이다. 메타(InstanceDB)는 JSON Schema 를 갖고,
+// 그 스키마를 통과한 record(InstanceDBRecord)들이 누적된다.
+// Phase D (UI) 에서 사용 예정.
+
+/** 필드별 렌더러 힌트. key = record.data 의 필드명, value = 렌더러 타입 */
+export type ViewerHintType = 'markdown' | 'text' | 'tag' | 'code' | 'json';
+
+export interface InstanceDB {
+  id: string;
+  name: string;
+  description?: string | null;
+  tags: string[];
+  viewerHints: Record<string, string>;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InstanceDBRecord {
+  id: string;
+  instanceDbId: string;
+  data: Record<string, unknown>;
+  sourceWarehouseId?: string | null;
+  sourceWorkflowId?: string | null;
+  sourceExecutionId?: string | null;
+  createdAt: string;
+}
+
+export interface CreateInstanceDBData {
+  name: string;
+  description?: string;
+  tags?: string[];
+  viewerHints?: Record<string, string>;
+}
+
+export type UpdateInstanceDBData = Partial<CreateInstanceDBData>;
+
+export interface InstanceDBRecordListResponse {
+  items: InstanceDBRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}

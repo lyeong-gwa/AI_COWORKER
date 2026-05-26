@@ -48,5 +48,21 @@ export function ExecutionStatusBadge({ status }: ExecutionStatusBadgeProps) {
     );
   }
 
+  if (status === 'not_executed') {
+    return (
+      <svg
+        className="w-4 h-4 text-slate-600 flex-shrink-0"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        aria-label="통과 안됨"
+      >
+        <line x1="3" y1="8" x2="13" y2="8" />
+      </svg>
+    );
+  }
+
   return null;
 }

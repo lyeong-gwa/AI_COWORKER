@@ -1,15 +1,22 @@
 import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { ChatProvider } from '../../contexts/ChatContext';
-import { ChatAssistant } from './ChatAssistant';
+// Phase 1c: 플로팅 챗 비활성화 — ChatProvider / ChatAssistant 마운트 해제.
+// 복원 시: 아래 두 import 주석 해제 후 return 문의 ChatProvider 래핑 + ChatAssistant 마운트 복구.
+// import { ChatProvider } from '../../contexts/ChatContext';
+// import { ChatAssistant } from './ChatAssistant';
 import { healthApi } from '../../services/api';
 
+// Phase 3b: 실행/조회 전용 대시보드로 재구성.
+// 대시보드(실행현황) → 워크플로우 목록 → 지식/API/노드 뷰어.
+// 편집/생성 기능은 모두 CLI로 이관되었으므로 메뉴에서 생략.
 const navItems = [
-  { path: '/', label: '대시보드', icon: '📊', shortcut: '1' },
-  { path: '/knowledge', label: '지식 베이스', icon: '📚', shortcut: '2' },
-  { path: '/api-definitions', label: 'API 정의', icon: '🌐', shortcut: '3' },
-  { path: '/nodes', label: '노드 관리', icon: '🔷', shortcut: '4' },
-  { path: '/factory', label: '공장 맵', icon: '🏭', shortcut: '5' },
+  { path: '/', label: '대시보드', icon: '⌂', shortcut: '1' },
+  { path: '/workflows', label: '업무자동화', icon: '◇', shortcut: '2' },
+  { path: '/knowledge', label: '지식', icon: '📚', shortcut: '3', end: true },
+  { path: '/knowledge/graph', label: '∟ 그래프', icon: '◈', shortcut: '', sub: true },
+  { path: '/api-definitions', label: 'API 명세', icon: '🌐', shortcut: '4' },
+  { path: '/nodes', label: '노드 카탈로그', icon: '⬡', shortcut: '5' },
+  { path: '/instance-dbs', label: '인스턴스DB', icon: '📦', shortcut: '6' },
 ];
 
 export function Layout() {
@@ -62,7 +69,7 @@ export function Layout() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && !e.shiftKey && !e.altKey) {
         const index = parseInt(e.key, 10);
-        if (index >= 1 && index <= 5) {
+        if (index >= 1 && index <= navItems.length) {
           e.preventDefault();
           navigate(navItems[index - 1].path);
         }
@@ -74,8 +81,8 @@ export function Layout() {
   }, [navigate]);
 
   return (
-    <ChatProvider>
-      <div className="flex h-screen bg-gray-900">
+    // Phase 1c: ChatProvider 비활성화. 복원 시 <ChatProvider> 래핑 추가.
+    <div className="flex h-screen bg-gray-900">
         {/* Mobile backdrop */}
         {isMobile && !isCollapsed && (
           <div
@@ -122,36 +129,54 @@ export function Layout() {
                 <li
                   key={item.path}
                   className="relative"
-                  onMouseEnter={() => isCollapsed && !isMobile && setHoveredItem(item.path)}
+                  onMouseEnter={() => isCollapsed && !isMobile && !item.sub && setHoveredItem(item.path)}
                   onMouseLeave={() => setHoveredItem(null)}
                 >
-                  <NavLink
-                    to={item.path}
-                    onClick={() => isMobile && setIsCollapsed(true)}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 relative ${
-                        isActive
-                          ? 'bg-blue-600 text-white border-l-4 border-blue-400 pl-2'
-                          : 'text-gray-300 hover:bg-gray-700 hover:text-white'
-                      } ${isCollapsed && !isMobile ? 'justify-center' : ''}`
-                    }
-                  >
-                    <span className="text-xl flex-shrink-0">{item.icon}</span>
-                    {!(isCollapsed && !isMobile) && (
-                      <div className="flex-1 flex items-center justify-between min-w-0">
-                        <span className="font-medium truncate">{item.label}</span>
-                        <span className="text-xs text-gray-400 opacity-60 ml-2 flex-shrink-0">
-                          ⌃{item.shortcut}
-                        </span>
-                      </div>
-                    )}
-                  </NavLink>
+                  {/* 서브 메뉴 항목 (접힌 사이드바에서 숨김) */}
+                  {item.sub && (isCollapsed && !isMobile) ? null : (
+                    <NavLink
+                      to={item.path}
+                      end={item.end}
+                      onClick={() => isMobile && setIsCollapsed(true)}
+                      className={({ isActive }) =>
+                        `flex items-center gap-3 px-3 rounded-lg transition-all duration-200 relative ${
+                          item.sub ? 'py-1.5' : 'py-3'
+                        } ${
+                          isActive
+                            ? item.sub
+                              ? 'text-blue-400 bg-blue-900/20'
+                              : 'bg-blue-600 text-white border-l-4 border-blue-400 pl-2'
+                            : item.sub
+                            ? 'text-gray-500 hover:text-gray-300 hover:bg-gray-700/50'
+                            : 'text-gray-300 hover:bg-gray-700 hover:text-white'
+                        } ${isCollapsed && !isMobile ? 'justify-center' : ''}`
+                      }
+                    >
+                      <span className={`flex-shrink-0 ${item.sub ? 'text-sm' : 'text-xl'}`}>
+                        {item.icon}
+                      </span>
+                      {!(isCollapsed && !isMobile) && (
+                        <div className="flex-1 flex items-center justify-between min-w-0">
+                          <span className={`truncate ${item.sub ? 'text-sm' : 'font-medium'}`}>
+                            {item.sub ? item.label.replace('∟ ', '') : item.label}
+                          </span>
+                          {item.shortcut && (
+                            <span className="text-xs text-gray-400 opacity-60 ml-2 flex-shrink-0">
+                              ⌃{item.shortcut}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </NavLink>
+                  )}
 
-                  {/* Tooltip on collapsed mode */}
-                  {isCollapsed && !isMobile && hoveredItem === item.path && (
+                  {/* Tooltip on collapsed mode (메인 항목만) */}
+                  {!item.sub && isCollapsed && !isMobile && hoveredItem === item.path && (
                     <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-2 bg-gray-700 text-white text-sm rounded-lg shadow-lg whitespace-nowrap z-50 pointer-events-none">
                       {item.label}
-                      <span className="text-xs text-gray-400 ml-2">Ctrl+{item.shortcut}</span>
+                      {item.shortcut && (
+                        <span className="text-xs text-gray-400 ml-2">Ctrl+{item.shortcut}</span>
+                      )}
                       <div className="absolute right-full top-1/2 -translate-y-1/2 w-0 h-0 border-y-4 border-y-transparent border-r-4 border-r-gray-700" />
                     </div>
                   )}
@@ -216,9 +241,7 @@ export function Layout() {
           <Outlet />
         </main>
 
-        {/* Chat Assistant */}
-        <ChatAssistant />
+        {/* Phase 1c: ChatAssistant 비활성화. 복원 시 <ChatAssistant /> 마운트 복구. */}
       </div>
-    </ChatProvider>
   );
 }

@@ -53,7 +53,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const checkHealth = async () => {
       try {
-        const baseUrl = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1').replace(/\/api\/v1$/, '');
+        const baseUrl = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/api\/v1$/, '');
         const res = await fetch(`${baseUrl}/health`);
         setIsConnected(res.ok);
       } catch {
@@ -243,10 +243,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// Phase 1c: 플로팅 챗 비활성화 — Provider 없이도 no-op으로 동작하도록 변경.
+// 복원 시: Layout.tsx에 ChatProvider + ChatAssistant 마운트 복구.
+const _noopContext: ChatContextValue = {
+  isOpen: false,
+  messages: [],
+  selectedContext: { type: 'none' },
+  isLoading: false,
+  sessionId: null,
+  isConnected: false,
+  activeMode: 'general',
+  pendingAction: null,
+  knowledgeFilter: null,
+  toggleChat: () => {},
+  openChat: () => {},
+  sendMessage: async () => {},
+  setContext: () => {},
+  clearContext: () => {},
+  onDataChange: () => () => {},
+  setMode: () => {},
+  setAction: () => {},
+  setKnowledgeFilter: () => {},
+};
+
 export function useChatContext() {
   const context = useContext(ChatContext);
-  if (context === undefined) {
-    throw new Error('useChatContext must be used within a ChatProvider');
-  }
-  return context;
+  // Provider 없으면 no-op 반환 (Phase 1c: 비활성화 상태)
+  return context ?? _noopContext;
 }

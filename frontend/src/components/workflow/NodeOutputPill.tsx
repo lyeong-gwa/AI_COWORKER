@@ -40,7 +40,12 @@ export function NodeOutputPill({ output, error, status }: NodeOutputPillProps) {
     return (
       <div
         className="nodrag nopan mt-1.5 mx-1 mb-1 rounded-lg bg-gray-900/80 border border-green-700/40 overflow-hidden cursor-pointer"
-        onClick={() => setExpanded(v => !v)}
+        onClick={(e) => {
+          // H-5: pill 클릭은 드로어 토글이 아닌 pill 자체의 expand 토글로 한정.
+          // ReactFlow `onNodeClick` 으로 버블링되어 카드 클릭과 충돌하는 것을 차단.
+          e.stopPropagation();
+          setExpanded(v => !v);
+        }}
       >
         {/* Summary row */}
         <div className="px-2.5 py-1.5 flex items-center justify-between gap-2">
@@ -61,9 +66,15 @@ export function NodeOutputPill({ output, error, status }: NodeOutputPillProps) {
                     <tr key={k} className="border-b border-white/5 last:border-0">
                       <td className="py-0.5 pr-2 text-gray-400 align-top font-mono whitespace-nowrap">{k}</td>
                       <td className="py-0.5 text-gray-200 break-all">
-                        {typeof (output as Record<string, unknown>)[k] === 'object'
-                          ? JSON.stringify((output as Record<string, unknown>)[k])
-                          : String((output as Record<string, unknown>)[k])}
+                        {(() => {
+                          const v = (output as Record<string, unknown>)[k];
+                          if (v === null || v === undefined) return 'null';
+                          if (typeof v === 'object') {
+                            if (Array.isArray(v)) return <span className="px-1 bg-gray-800 rounded text-gray-400">[Array({v.length})]</span>;
+                            return <span className="px-1 bg-gray-800 rounded text-gray-400">{`{${Object.keys(v as object).length} keys}`}</span>;
+                          }
+                          return String(v);
+                        })()}
                       </td>
                     </tr>
                   ))}

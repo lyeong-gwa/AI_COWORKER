@@ -15,7 +15,8 @@
 !.omc/
 !.omc/plans/
 !.omc/plans/**
-**/.omc/
+backend/.omc/
+frontend/.omc/
 .claude/
 .playwright-mcp/
 

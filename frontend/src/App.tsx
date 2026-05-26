@@ -1,22 +1,42 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ToastProvider } from './components/common/Toast';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { Layout } from './components/common/Layout';
 
+// Phase 3b: 새 대시보드 + 워크플로우 뷰어 + 인스턴스 상세
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
-const KnowledgeBasePage = lazy(() => import('./pages/KnowledgeBasePage').then(m => ({ default: m.KnowledgeBasePage })));
-const ApiDefinitionPage = lazy(() => import('./pages/ApiDefinitionPage'));
-const NodeManagementPage = lazy(() => import('./pages/NodeManagementPage').then(m => ({ default: m.NodeManagementPage })));
-const FactoryPage = lazy(() => import('./pages/FactoryPage').then(m => ({ default: m.FactoryPage })));
-const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
+const WorkflowListPage = lazy(() => import('./pages/WorkflowListPage'));
+const WorkflowViewerPage = lazy(() => import('./pages/WorkflowViewerPage'));
+const InstanceDetailPage = lazy(() => import('./pages/InstanceDetailPage'));
+
+// Phase 3b: 읽기 전용 축소판
+const KnowledgeViewerPage = lazy(() =>
+  import('./pages/KnowledgeViewerPage').then((m) => ({ default: m.KnowledgeViewerPage })),
+);
+const KnowledgeGraphPage = lazy(() =>
+  import('./pages/KnowledgeGraphPage').then((m) => ({ default: m.KnowledgeGraphPage })),
+);
+const ApiDefinitionViewerPage = lazy(() => import('./pages/ApiDefinitionViewerPage'));
+const NodeCatalogPage = lazy(() =>
+  import('./pages/NodeCatalogPage').then((m) => ({ default: m.NodeCatalogPage })),
+);
+const InstanceDBViewerPage = lazy(() =>
+  import('./pages/InstanceDBViewerPage').then((m) => ({ default: m.InstanceDBViewerPage })),
+);
+
+const NotFoundPage = lazy(() =>
+  import('./pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage })),
+);
 
 function PageLoader() {
   return (
-    <div className="flex items-center justify-center h-full">
+    <div className="flex items-center justify-center h-full bg-slate-950">
       <div className="flex flex-col items-center gap-3">
-        <div className="w-10 h-10 border-4 border-gray-600 border-t-blue-500 rounded-full animate-spin" />
-        <span className="text-gray-400 text-sm">페이지 로딩 중...</span>
+        <div className="w-8 h-8 border-2 border-slate-700 border-t-sky-500 rounded-full animate-spin" />
+        <span className="text-slate-500 text-xs font-mono tracking-wider">
+          페이지 로딩 중...
+        </span>
       </div>
     </div>
   );
@@ -30,15 +50,34 @@ function App() {
           <Suspense fallback={<PageLoader />}>
             <Routes>
               <Route path="/" element={<Layout />}>
+                {/* 대시보드 (실행현황 + 워크플로우 카드) */}
                 <Route index element={<DashboardPage />} />
-                <Route path="knowledge" element={<KnowledgeBasePage />} />
-                <Route path="api-definitions" element={
-                  <Suspense fallback={<PageLoader />}>
-                    <ApiDefinitionPage />
-                  </Suspense>
-                } />
-                <Route path="nodes" element={<NodeManagementPage />} />
-                <Route path="factory" element={<FactoryPage />} />
+
+                {/* 워크플로우 */}
+                <Route path="workflows" element={<WorkflowListPage />} />
+                <Route path="workflows/:id" element={<WorkflowViewerPage />} />
+                <Route
+                  path="workflows/:id/instances/:iid"
+                  element={<InstanceDetailPage />}
+                />
+
+                {/* 읽기 전용 뷰어 페이지 */}
+                <Route path="knowledge" element={<KnowledgeViewerPage />} />
+                <Route path="knowledge/graph" element={<KnowledgeGraphPage />} />
+                <Route path="api-definitions" element={<ApiDefinitionViewerPage />} />
+                <Route path="nodes" element={<NodeCatalogPage />} />
+                <Route path="instance-dbs" element={<InstanceDBViewerPage />} />
+
+                {/* 레거시 경로 → 신규 경로 리다이렉트 (기존 북마크 사용자 대응) */}
+                <Route path="factory" element={<Navigate to="/workflows" replace />} />
+                <Route path="factory/:id" element={<Navigate to="/workflows" replace />} />
+                <Route path="dashboard" element={<Navigate to="/" replace />} />
+                <Route path="ops" element={<Navigate to="/" replace />} />
+                <Route path="workflow" element={<Navigate to="/workflows" replace />} />
+                <Route path="knowledge-base" element={<Navigate to="/knowledge" replace />} />
+                <Route path="api-definition" element={<Navigate to="/api-definitions" replace />} />
+                <Route path="node-management" element={<Navigate to="/nodes" replace />} />
+
                 <Route path="*" element={<NotFoundPage />} />
               </Route>
             </Routes>

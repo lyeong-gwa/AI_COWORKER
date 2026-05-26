@@ -38,7 +38,9 @@ function FactoryNodeInner({ data, selected, id }: { data: FactoryNodeData; selec
       ? 'border-green-500 shadow-[0_0_12px_rgba(34,197,94,0.3)]'
       : execStatus === 'failed'
         ? 'border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.3)]'
-        : '';
+        : execStatus === 'not_executed'
+          ? 'border-slate-700/40 opacity-50 grayscale'
+          : '';
 
   const [queueCount, setQueueCount] = useState({ pending: 0, processing: 0, total: 0 });
 
