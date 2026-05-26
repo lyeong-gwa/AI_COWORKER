@@ -54,7 +54,15 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """데이터베이스 초기화 (테이블 생성)"""
+    """데이터베이스 초기화 (테이블 생성).
+
+    Karpathy v2 (Knowledge v2) 신규 테이블 — `knowledge_raw_sources`,
+    `knowledge_changelog_entries` — 는 `Base.metadata.create_all` 가
+    이미 존재하는 테이블은 건너뛰므로 idempotent.
+    """
+    # 모델 등록 보장 (import side-effect for create_all)
+    from ..models import knowledge_raw, knowledge_changelog  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -67,6 +75,32 @@ async def init_db() -> None:
                 )
             except Exception:
                 pass  # 이미 존재하면 무시
+
+    # 마이그레이션: warehouse_entries에 dedup_key 컬럼 추가
+    async with engine.begin() as conn:
+        try:
+            await conn.execute(
+                text("ALTER TABLE warehouse_entries ADD COLUMN dedup_key VARCHAR(128)")
+            )
+            print("[MIGRATE] warehouse_entries.dedup_key 컬럼 추가 완료")
+        except Exception:
+            pass  # 이미 존재하면 무시
+        try:
+            await conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_warehouse_entries_dedup_key ON warehouse_entries(dedup_key)")
+            )
+        except Exception:
+            pass
+
+    # 마이그레이션 (2026-05-12): InstanceDB 파일시스템 재설계 — 구 SQLite 테이블 폐기.
+    # 운영 잔재 1건이 있더라도 records 0건이므로 안전하게 drop.
+    # 파일시스템(backend/data/instance_dbs/) 으로 이전됨.
+    async with engine.begin() as conn:
+        for tbl in ("instance_db_records", "instance_dbs"):
+            try:
+                await conn.execute(text(f"DROP TABLE IF EXISTS {tbl}"))
+            except Exception:
+                pass
 
     # 마이그레이션: ai_nodes 테이블에서 레거시 컬럼 제거
     # SQLite는 DROP COLUMN을 지원하지 않으므로 테이블 재구성

@@ -1,0 +1,66 @@
+# data/knowledge/_schema.yaml
+version: 3
+schema_owner: human
+last_curated: 2026-05-26
+
+services:
+  - id: codeeyes
+    title: CodeEyes (소스코드 검증)
+    description: 정적 코드 분석 서비스 운영 지식
+  - id: unknown
+    title: 미분류
+    description: 마이그레이션 임시·legacy 페이지 (운영자가 점진적으로 재태깅)
+
+categories:
+  - id: overview
+    title: 개요 / 시스템 소개
+    description: 서비스/시스템 전반 소개
+  - id: operations-guide
+    title: 운영 가이드 / 절차
+    description: 절차·플로우·일상 운영 가이드
+  - id: troubleshooting
+    title: 트러블슈팅 / 오류 대응
+    description: 오류·장애·해결법
+  - id: faq
+    title: 자주 묻는 질문
+    description: 자주 묻는 질문 모음
+  - id: integration
+    title: 외부 연동 (GitHub·LDAP 등)
+    description: 외부 시스템 연동·방화벽·API 통합
+  - id: member-management
+    title: 권한·구성원 관리
+    description: 사용자/팀/권한 운영
+  - id: policy
+    title: 정책 / 기준 / 룰
+    description: 권한·규칙·승인 기준 등 정책류
+  - id: installation
+    title: 설치 / 환경 구성
+    description: 설치·구성·환경 셋업 가이드
+
+page_types:
+  Summary:
+    purpose: 원본(들)을 요약. 빠르게 훑기 위함.
+    must_link: [Entity, Concept]
+  Entity:
+    purpose: 사람·시스템·서비스·문서 등 명확한 대상 1개를 기술.
+    must_link: []
+  Concept:
+    purpose: 추상 개념·정책·원칙을 정의.
+    must_link: []
+  Comparison:
+    purpose: 2개 이상의 Entity/Concept 차이를 비교.
+    must_link: [Entity, Concept]    # 비교 대상은 반드시 링크
+    min_links: 2
+  Synthesis:
+    purpose: 운영 중 발견된 새로운 통합 통찰(Query→환류).
+    must_link: [Summary, Entity, Concept]
+
+link_policy:
+  format: "[[category/slug]]"
+  legacy_title_link_allowed: true       # [[Title]] 도 허용, lint 가 정규화 권고
+  broken_link_marker: "[[deleted:{id}]]"
+
+filename_policy:
+  slug_pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+  max_slug_length: 64
+  enforce_english_slug: true            # 한글 slug 금지

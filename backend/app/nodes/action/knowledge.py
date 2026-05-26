@@ -1,5 +1,18 @@
-"""지식 검색 노드 핸들러"""
-from typing import Any, Dict
+"""지식 검색 노드 핸들러
+
+Karpathy v2 P3 (`.omc/plans/지식-karpathy-v2.md` §6.3):
+  - 신규 config: ``pageTypes`` (list), ``minScore`` (float), ``expandBacklinks`` (bool)
+  - 응답에 ``page_type``, ``version``, ``links``, ``search_page_types`` 추가
+  - ``categories`` 와 ``pageTypes`` 결합 시 ChromaDB ``$and`` 사용
+  - ``expandBacklinks=true`` → hit 의 1-hop backlink 페이지를 추가 (``isBacklinkExpansion=true``)
+
+Multi-service v3 P2 (`.omc/plans/지식-multi-service.md` §2.6):
+  - 신규 config: ``services`` (list)
+  - ``categories`` / ``pageTypes`` / ``services`` 모두 동시 결합 가능 (``$and``)
+  - 응답 페이로드 item 에 ``service`` 필드 추가
+  - 응답 result 에 ``search_services`` 추가 (config.services 설정 시)
+"""
+from typing import Any, Dict, List, Optional
 
 from ...core.constants import BeltKey, KNOWLEDGE_MIN_RESULTS, KNOWLEDGE_MAX_RESULTS
 from ..registry import NodeHandlerRegistry
@@ -33,6 +46,27 @@ class KnowledgeHandler(NodeHandler):
             max(KNOWLEDGE_MIN_RESULTS, config.get('maxResults', 5)),
         )
 
+        # ── Karpathy v2 P3 신규 파라미터 ───────────────────────────────────
+        page_types_cfg = config.get('pageTypes', []) or []
+        if not isinstance(page_types_cfg, list):
+            page_types_cfg = []
+        page_types: List[str] = [str(pt) for pt in page_types_cfg if pt]
+
+        # ── Multi-service v3 P2 §2.6 신규 파라미터 ─────────────────────────
+        services_cfg = config.get('services', []) or []
+        if isinstance(services_cfg, str):
+            services_cfg = [services_cfg] if services_cfg else []
+        if not isinstance(services_cfg, list):
+            services_cfg = []
+        services: List[str] = [str(s) for s in services_cfg if s]
+
+        try:
+            min_score = float(config.get('minScore', 0.0))
+        except (TypeError, ValueError):
+            min_score = 0.0
+
+        expand_backlinks = bool(config.get('expandBacklinks', False))
+
         flat_input = input_data
 
         # 입력 데이터에서 검색 쿼리 추출
@@ -60,31 +94,51 @@ class KnowledgeHandler(NodeHandler):
         try:
             vector_db = get_vector_db()
 
-            # ChromaDB 필터 구성
-            where_filter = None
+            # ChromaDB 필터 구성 — categories + pageTypes + services 결합 시 $and 사용
+            # (Multi-service v3 P2 §2.6 — services 추가)
+            cat_filter: Optional[Dict[str, Any]] = None
             if categories:
                 if len(categories) == 1:
-                    where_filter = {'category': categories[0]}
+                    cat_filter = {'category': categories[0]}
                 else:
-                    where_filter = {'category': {'$in': categories}}
+                    cat_filter = {'category': {'$in': categories}}
 
-            # 검색 실행
+            pt_filter: Optional[Dict[str, Any]] = None
+            if page_types:
+                if len(page_types) == 1:
+                    pt_filter = {'page_type': page_types[0]}
+                else:
+                    pt_filter = {'page_type': {'$in': page_types}}
+
+            svc_filter: Optional[Dict[str, Any]] = None
+            if services:
+                if len(services) == 1:
+                    svc_filter = {'service': services[0]}
+                else:
+                    svc_filter = {'service': {'$in': services}}
+
+            clauses = [c for c in (cat_filter, pt_filter, svc_filter) if c]
+            if len(clauses) >= 2:
+                where_filter = {'$and': clauses}
+            elif len(clauses) == 1:
+                where_filter = clauses[0]
+            else:
+                where_filter = None
+
+            # 검색 실행 (chunk-aware dedup 은 vector_db.search 가 내부 처리)
             results = vector_db.search(
                 query=query,
                 top_k=max_results,
                 where=where_filter,
+                min_score=min_score,
             )
 
-            knowledge_items = []
+            knowledge_items: List[Dict[str, Any]] = []
+            seen_ids: set[str] = set()
+
             for sr in results:
-                item = {
-                    'id': sr.id,
-                    'content': sr.content,
-                    'score': sr.score,
-                    'title': sr.metadata.get('title', sr.id),
-                    'category': sr.metadata.get('category', ''),
-                    'tags': sr.metadata.get('tags', ''),
-                }
+                # P3 §6.3 응답 — page_type / version / links 노출
+                item = self._build_item(sr)
 
                 # 태그 필터 (벡터 DB 필터가 지원하지 않는 태그 교차 필터링)
                 if tags:
@@ -94,14 +148,118 @@ class KnowledgeHandler(NodeHandler):
                     if not any(t in item_tags for t in tags):
                         continue
 
-                knowledge_items.append(item)
+                # min_score 는 vector_db.search 가 1차 필터 (chunk-level).
+                # page-level 결과 score 도 한 번 더 확인 (안전망).
+                if sr.score < min_score:
+                    continue
 
-            # 지식 검색 결과 + 카테고리 반환 (입력 데이터는 _passthrough로 프레임워크가 처리)
-            result = {'knowledge': knowledge_items}
+                knowledge_items.append(item)
+                seen_ids.add(item['id'])
+
+            # 1-hop backlink 확장 (P3 §6.3 expandBacklinks)
+            if expand_backlinks and knowledge_items:
+                expansion = self._expand_backlinks(
+                    page_ids=[it['id'] for it in knowledge_items],
+                    already=seen_ids,
+                    category_filter=categories,
+                    page_type_filter=page_types,
+                )
+                knowledge_items.extend(expansion)
+
+            # 지식 검색 결과 + 카테고리/페이지타입/서비스 반환
+            result: Dict[str, Any] = {'knowledge': knowledge_items}
             if categories:
                 result['search_categories'] = categories
+            if page_types:
+                result['search_page_types'] = page_types
+            if services:
+                # Multi-service v3 P2 §2.6 — 사용된 service 필터 노출
+                result['search_services'] = services
             return result
 
         except Exception as e:
             # 검색 실패 시 빈 결과 + 에러 정보 (입력 데이터는 _passthrough로 처리)
             return {'knowledge': [], BeltKey.KNOWLEDGE_ERROR: str(e)}
+
+    # ── helpers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_item(sr: Any) -> Dict[str, Any]:
+        """SearchResult → response item (P3 §6.3 + multi-service v3 P2 §2.6 응답 shape).
+
+        ``page_type``, ``version``, ``links``, ``service`` 노출. 메타에 없으면 default.
+        """
+        meta = sr.metadata or {}
+
+        # links 는 ChromaDB 가 list → "a,b" 문자열로 저장. 다시 split.
+        links_raw = meta.get('links', '')
+        if isinstance(links_raw, str):
+            links_list = [s.strip() for s in links_raw.split(',') if s.strip()]
+        elif isinstance(links_raw, list):
+            links_list = [str(s) for s in links_raw]
+        else:
+            links_list = []
+
+        try:
+            version_v = int(meta.get('version', 1))
+        except (TypeError, ValueError):
+            version_v = 1
+
+        return {
+            'id': sr.id,
+            'title': meta.get('title', sr.id),
+            'content': sr.content,
+            'score': sr.score,
+            'category': meta.get('category', ''),
+            'service': meta.get('service', 'unknown'),
+            'tags': meta.get('tags', ''),
+            'page_type': meta.get('page_type', 'Summary'),
+            'version': version_v,
+            'links': links_list,
+        }
+
+    @staticmethod
+    def _expand_backlinks(
+        page_ids: List[str],
+        already: set,
+        category_filter: List[str],
+        page_type_filter: List[str],
+    ) -> List[Dict[str, Any]]:
+        """hit 페이지를 가리키는 1-hop backlink 페이지를 추가.
+
+        파일 스캔으로 ``[[page_id]]`` 보유 페이지 검출. 동일 카테고리/페이지타입
+        필터가 있으면 추가 결과에도 동일 필터를 적용.
+        """
+        from ...services.knowledge_file_service import list_md_files
+        from ...services.knowledge_link_parser import has_link_to
+
+        all_docs = list_md_files()
+        cat_set = set(category_filter or [])
+        pt_set = set(page_type_filter or [])
+
+        out: List[Dict[str, Any]] = []
+        seen_local: set = set(already)
+        for target_id in page_ids:
+            for d in all_docs:
+                if d.id in seen_local:
+                    continue
+                if cat_set and d.category not in cat_set:
+                    continue
+                if pt_set and d.page_type not in pt_set:
+                    continue
+                if has_link_to(d.content, target_id):
+                    out.append({
+                        'id': d.id,
+                        'title': d.title,
+                        'content': d.content,
+                        'score': 0.0,
+                        'category': d.category,
+                        'service': d.service or 'unknown',
+                        'tags': ','.join(d.tags) if d.tags else '',
+                        'page_type': d.page_type,
+                        'version': d.version,
+                        'links': list(d.links),
+                        'isBacklinkExpansion': True,
+                    })
+                    seen_local.add(d.id)
+        return out

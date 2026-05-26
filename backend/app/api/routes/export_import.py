@@ -101,7 +101,7 @@ def _workflow_node_to_export(node: WorkflowNode) -> dict:
         "aiNodeId": node.ai_node_id,
         "config": node.config,
         "name": node.name,
-        "position": node.position,
+        "orderIndex": node.order_index,
         "configOverrides": node.config_overrides,
         "inputMapping": node.input_mapping,
     }
@@ -127,9 +127,9 @@ def _workflow_to_export(wf: Workflow) -> dict:
         "description": wf.description,
         "status": wf.status.value if wf.status else None,
         "tags": wf.tags,
-        "viewport": wf.viewport,
         "trigger": wf.trigger,
         "variables": wf.variables,
+        "createdBy": wf.created_by,
         "nodes": [_workflow_node_to_export(n) for n in wf.nodes],
         "connections": [_workflow_conn_to_export(c) for c in wf.connections],
     }
@@ -619,9 +619,9 @@ async def import_workflows(
                 existing_wf.name = wf_data.get("name", existing_wf.name)
                 existing_wf.description = wf_data.get("description", existing_wf.description)
                 existing_wf.tags = wf_data.get("tags", existing_wf.tags)
-                existing_wf.viewport = wf_data.get("viewport", existing_wf.viewport)
                 existing_wf.trigger = wf_data.get("trigger", existing_wf.trigger)
                 existing_wf.variables = wf_data.get("variables", existing_wf.variables)
+                existing_wf.created_by = wf_data.get("createdBy", existing_wf.created_by)
 
                 for node in list(existing_wf.nodes):
                     await db.delete(node)
@@ -642,15 +642,15 @@ async def import_workflows(
                     description=wf_data.get("description"),
                     status=status,
                     tags=wf_data.get("tags", []),
-                    viewport=wf_data.get("viewport", {"x": 0, "y": 0, "zoom": 1}),
                     trigger=wf_data.get("trigger", {"type": "manual", "config": {}}),
                     variables=wf_data.get("variables", {}),
+                    created_by=wf_data.get("createdBy", "cli"),
                 ))
                 await db.flush()
                 total_created += 1
 
             # Re-create nodes
-            for node_data in wf_data.get("nodes", []):
+            for idx, node_data in enumerate(wf_data.get("nodes", [])):
                 db.add(WorkflowNode(
                     id=node_data.get("id") or str(uuid.uuid4()),
                     workflow_id=wf_id,
@@ -659,7 +659,7 @@ async def import_workflows(
                     ai_node_id=node_data.get("aiNodeId"),
                     config=node_data.get("config", {}),
                     name=node_data.get("name", ""),
-                    position=node_data.get("position", {"x": 0, "y": 0}),
+                    order_index=node_data.get("orderIndex", idx),
                     config_overrides=node_data.get("configOverrides", {}),
                     input_mapping=node_data.get("inputMapping", {}),
                 ))

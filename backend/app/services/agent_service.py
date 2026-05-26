@@ -277,11 +277,7 @@ async def generate_document_content(
         system_prompt = """당신은 지식 문서를 체계적으로 작성하는 전문가입니다.
 사용자의 요청을 분석하여 구조화된 지식 문서를 생성합니다.
 
-현재 등록된 카테고리:
-- 소스코드검증: 코드아이즈 서비스 관련 지식 (스펙, 인프라, 수용, 권한, 플러그인 등)
-- 양식: 엑셀 양식 템플릿
-
-카테고리가 위 목록에 없는 경우, 적절한 새 카테고리명을 사용할 수 있습니다.
+사용자가 등록한 카테고리를 활용하거나, 요청 내용에 맞는 새 카테고리명을 사용할 수 있습니다.
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {
@@ -378,11 +374,11 @@ INTENT_DETECTION_PROMPT = """당신은 사용자의 의도를 파악하는 AI입
 가능한 action 타입:
 - explain: 설명 요청 ("이게 뭐야?", "설명해줘")
 - view: 조회 요청 ("보여줘", "목록")
-- create: 생성 요청 ("만들어줘", "추가해줘", "등록해줘", "태스크로 만들어줘")
+- create: 생성 요청 ("만들어줘", "추가해줘", "등록해줘")
 - update: 수정 요청 ("변경해줘", "수정해줘", "상태를 ~로")
 - delete: 삭제 요청 ("삭제해줘", "제거해줘")
 - execute: 실행 요청 ("실행해줘", "테스트해줘")
-- search: 검색/문의/질문 ("찾아줘", "검색해줘", "알려줘", "~은 어떻게 하나요?", "~이 뭐야?", 업무/서비스 관련 질문)
+- search: 검색/문의/질문 ("찾아줘", "검색해줘", "알려줘", "~은 어떻게 하나요?", "~이 뭐야?", 업무 관련 질문)
 - fill_form: 양식 채우기 요청 ("~양식에 맞춰서 작성해줘", "~표로 정리해줘", "~양식으로 만들어줘", "~표 채워줘")
 - chat: 일반 대화 (위에 해당하지 않음)
 
@@ -391,48 +387,38 @@ INTENT_DETECTION_PROMPT = """당신은 사용자의 의도를 파악하는 AI입
 - workflow: 워크플로우
 - document: 문서
 
-현재 등록된 카테고리:
-- 소스코드검증: 코드아이즈 서비스 관련 지식 (스펙, 인프라, 수용, 권한, 플러그인 등)
-- 양식: 엑셀 양식 템플릿 (서버현황표, 인프라요약표, 서비스정보표, 서버쌍구성표 등)
-서비스명이 명시되지 않아도 문의 내용으로 카테고리 추론
+사용자가 등록한 카테고리를 문맥에서 추론하여 searchCategory에 사용하세요.
 
 parameters 가이드:
-- search + document인 경우: {"query": "검색 키워드", "searchCategory": "소스코드검증"}
+- search + document인 경우: {"query": "검색 키워드", "searchCategory": "카테고리명(옵션)"}
 - fill_form인 경우: {"formQuery": "양식명", "dataQuery": "데이터 검색어", "dataCategory": "데이터카테고리"}
-  - formQuery: 양식 카테고리에서 검색할 양식명 (예: "서버현황표", "인프라요약표")
-  - dataQuery: 데이터 카테고리에서 검색할 키워드 (예: "소스코드검증 인프라 스펙")
-  - dataCategory: 데이터를 검색할 카테고리 (예: "소스코드검증")
+  - formQuery: 양식 카테고리에서 검색할 양식명
+  - dataQuery: 데이터 카테고리에서 검색할 키워드
+  - dataCategory: 데이터를 검색할 카테고리
 - update + document인 경우: {"updateInstruction": "수정 지시 원문"}
 - create + document인 경우: {"title": "문서 제목", "category": "카테고리", "tags": ["태그"], "contentHint": "내용 힌트"}
+
 검색 예시:
-- "ITO 서비스 수용신청은 어떻게 하나요?" → action: "search", target: "document", parameters: {"query": "ITO 서비스 수용신청 절차", "searchCategory": "소스코드검증"}
-- "권한 추가 요청하려면요?" → action: "search", target: "document", parameters: {"query": "권한 추가 요청", "searchCategory": "소스코드검증"}
-- "플러그인 에러가 났는데요" → action: "search", target: "document", parameters: {"query": "플러그인 에러", "searchCategory": "소스코드검증"}
+- "업무 프로세스 절차가 어떻게 되나요?" → action: "search", target: "document", parameters: {"query": "업무 프로세스 절차"}
+- "권한 신청은 어떻게 하나요?" → action: "search", target: "document", parameters: {"query": "권한 신청 절차"}
 
 양식 채우기 예시:
-- "소스코드검증 스펙을 서버현황표 양식에 맞춰서 작성해줘" → action: "fill_form", target: "document", parameters: {"formQuery": "서버현황표", "dataQuery": "소스코드검증 서비스 인프라 스펙", "dataCategory": "소스코드검증"}
-- "인프라 정보를 서비스정보표로 정리해줘" → action: "fill_form", target: "document", parameters: {"formQuery": "서비스정보표", "dataQuery": "소스코드검증 인프라 스펙", "dataCategory": "소스코드검증"}
-- "서버 쌍 구성을 양식에 맞춰 알려줘" → action: "fill_form", target: "document", parameters: {"formQuery": "서버쌍구성표", "dataQuery": "소스코드검증 서버 쌍 구성", "dataCategory": "소스코드검증"}
-- "코드아이즈 인프라요약표 채워줘" → action: "fill_form", target: "document", parameters: {"formQuery": "인프라요약표", "dataQuery": "소스코드검증 인프라", "dataCategory": "소스코드검증"}
+- "업무 현황을 양식에 맞춰 작성해줘" → action: "fill_form", target: "document", parameters: {"formQuery": "업무현황표", "dataQuery": "업무 진행 현황"}
+- "보고서 양식으로 정리해줘" → action: "fill_form", target: "document", parameters: {"formQuery": "보고서", "dataQuery": "보고 내용"}
 
 문서 수정 예시:
-- "ceyes-pk-a01의 IP를 10.10.10.21로 변경해줘" → action: "update", target: "document", parameters: {"updateInstruction": "ceyes-pk-a01의 IP를 10.10.10.21로 변경"}
-- "이 문서 제목을 '인프라 현황'으로 바꿔줘" → action: "update", target: "document", parameters: {"updateInstruction": "제목을 '인프라 현황'으로 변경"}
-- "서버 목록에 ceyes-pk-a05 추가해줘" → action: "update", target: "document", parameters: {"updateInstruction": "서버 목록에 ceyes-pk-a05 추가"}
+- "이 항목의 값을 변경해줘" → action: "update", target: "document", parameters: {"updateInstruction": "항목 값 변경"}
+- "이 문서 제목을 바꿔줘" → action: "update", target: "document", parameters: {"updateInstruction": "제목 변경"}
 
 문서 생성 예시:
-- "코드아이즈 장애대응 매뉴얼 문서를 만들어줘" → action: "create", target: "document", parameters: {"title": "코드아이즈 장애대응 매뉴얼", "category": "소스코드검증", "contentHint": "장애대응 절차"}
-- "신규 서비스 수용 절차를 지식 문서로 작성해줘" → action: "create", target: "document", parameters: {"title": "신규 서비스 수용 절차", "category": "소스코드검증", "contentHint": "서비스 수용 절차"}
+- "업무 매뉴얼 문서를 만들어줘" → action: "create", target: "document", parameters: {"title": "업무 매뉴얼", "contentHint": "업무 절차"}
 - "회의록 문서 만들어줘" → action: "create", target: "document", parameters: {"title": "회의록", "contentHint": "회의 내용"}
-
-복합 요청 인식:
-- 서비스명이 언급되면 searchCategory에 해당 서비스명 추출 (예: "코드아이즈" → searchCategory: "소스코드검증")
 
 응답 형식 (JSON만):
 {
   "action": "search",
   "target": "document",
-  "parameters": {"query": "소스코드검증 서비스 수용 절차", "searchCategory": "소스코드검증"},
+  "parameters": {"query": "업무 프로세스 절차"},
   "confidence": 0.9
 }
 """
@@ -896,16 +882,15 @@ async def process_chat_message(
 
         # LLM이 파라미터를 설정하지 못한 경우 메시지에서 자동 추출
         if not form_query:
-            # "서버현황표 양식" → "서버현황표" 추출
+            # "업무양식" → "업무양식" 등 '표'/'양식'으로 끝나는 단어 추출
             import re
             form_match = re.search(r'([\w]+(?:표|양식))', content)
             form_query = form_match.group(1) if form_match else "양식"
         if not data_query:
             data_query = content
         if not data_category:
-            # 서비스명 키워드로 카테고리 추론
-            if any(kw in content for kw in ["소스코드검증", "코드아이즈", "CodeEyes", "ceyes"]):
-                data_category = "소스코드검증"
+            # 카테고리 미지정 시 빈 값 유지 (전체 카테고리에서 검색)
+            pass
 
         # 1) 양식 템플릿: 항상 category="양식"에서 검색
         form_results = await search_knowledge_base(
