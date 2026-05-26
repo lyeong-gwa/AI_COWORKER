@@ -5,7 +5,7 @@ Application Configuration
 import os
 from pathlib import Path
 from typing import Optional, List
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 # backend/ 디렉토리를 기준 경로로 설정 (CWD 무관하게 동작)
@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     # 지식 문서 디렉토리
     KNOWLEDGE_DIR: str = "./data/knowledge"
+
+    # 인스턴스DB 파일시스템 저장 루트 (1 InstanceDB = 1 폴더)
+    INSTANCE_DB_DIR: str = "./data/instance_dbs"
 
     # 로컬 임베딩 모델 (ONNX Runtime + tokenizers)
     ONNX_MODEL_PATH: str = "./models/onnx/jhgan_ko-sroberta-multitask"
@@ -73,9 +76,12 @@ class Settings(BaseSettings):
     WORKFLOW_MAX_EXECUTION_TIME: int = 300  # 5분
     WORKFLOW_NODE_TIMEOUT: int = 60  # 노드당 1분
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    # Pydantic v2 설정 (구 ``class Config:`` 패턴 → SettingsConfigDict)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 @lru_cache()

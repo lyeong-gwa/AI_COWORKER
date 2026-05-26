@@ -4,7 +4,7 @@ Workflow Schemas (프론트엔드 타입에 맞춤 - camelCase)
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..models.workflow import WorkflowStatus, ExecutionStatus
 
@@ -12,11 +12,6 @@ from ..models.workflow import WorkflowStatus, ExecutionStatus
 # ─────────────────────────────────────────────────────────────────────────────
 # Workflow Node & Connection
 # ─────────────────────────────────────────────────────────────────────────────
-
-class Position(BaseModel):
-    """캔버스 위치"""
-    x: float = 0
-    y: float = 0
 
 
 class WorkflowNodeCreate(BaseModel):
@@ -27,7 +22,7 @@ class WorkflowNodeCreate(BaseModel):
     aiNodeId: Optional[str] = None
     config: Dict[str, Any] = Field(default_factory=dict)
     name: str
-    position: Position = Field(default_factory=Position)
+    orderIndex: int = 0  # 형제 노드 안정 순번 (자동 레이아웃 tie-break)
     configOverrides: Dict[str, Any] = Field(default_factory=dict)
     inputMapping: Dict[str, str] = Field(default_factory=dict)
 
@@ -40,13 +35,11 @@ class WorkflowNodeResponse(BaseModel):
     aiNodeId: Optional[str] = Field(default=None, serialization_alias="aiNodeId")
     config: Dict[str, Any] = Field(default_factory=dict)
     name: str
-    position: Dict[str, float]
+    orderIndex: int = Field(default=0, serialization_alias="orderIndex")
     configOverrides: Dict[str, Any] = Field(serialization_alias="configOverrides")
     inputMapping: Dict[str, str] = Field(serialization_alias="inputMapping")
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class ConnectionCondition(BaseModel):
@@ -75,9 +68,7 @@ class WorkflowConnectionResponse(BaseModel):
     targetHandle: Optional[str] = Field(None, serialization_alias="targetHandle")
     condition: Optional[Dict[str, Any]] = None
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -90,25 +81,18 @@ class TriggerConfig(BaseModel):
     config: Dict[str, Any] = Field(default_factory=dict)
 
 
-class ViewportConfig(BaseModel):
-    """캔버스 뷰포트"""
-    x: float = 0
-    y: float = 0
-    zoom: float = 1
-
-
 class WorkflowBase(BaseModel):
     """워크플로우 기본 스키마"""
     name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
-    viewport: ViewportConfig = Field(default_factory=ViewportConfig)
     trigger: TriggerConfig = Field(default_factory=TriggerConfig)
     variables: Dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkflowCreate(WorkflowBase):
     """워크플로우 생성"""
+    createdBy: str = Field(default="cli")  # 'cli' | 'web'
     nodes: List[WorkflowNodeCreate] = Field(default_factory=list)
     connections: List[WorkflowConnectionCreate] = Field(default_factory=list)
 
@@ -119,7 +103,6 @@ class WorkflowUpdate(BaseModel):
     description: Optional[str] = None
     status: Optional[WorkflowStatus] = None
     tags: Optional[List[str]] = None
-    viewport: Optional[ViewportConfig] = None
     trigger: Optional[TriggerConfig] = None
     variables: Optional[Dict[str, Any]] = None
     nodes: Optional[List[WorkflowNodeCreate]] = None
@@ -133,17 +116,15 @@ class WorkflowResponse(BaseModel):
     description: Optional[str] = None
     status: WorkflowStatus
     tags: List[str]
-    viewport: Dict[str, Any]
     trigger: Dict[str, Any]
     variables: Dict[str, Any]
+    createdBy: str = Field(default="cli", serialization_alias="createdBy")
     nodes: List[WorkflowNodeResponse]
     connections: List[WorkflowConnectionResponse]
     createdAt: datetime = Field(serialization_alias="createdAt")
     updatedAt: datetime = Field(serialization_alias="updatedAt")
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class WorkflowSummaryResponse(BaseModel):
@@ -154,12 +135,11 @@ class WorkflowSummaryResponse(BaseModel):
     status: WorkflowStatus
     tags: List[str]
     nodeCount: int = Field(serialization_alias="nodeCount")
+    createdBy: str = Field(default="cli", serialization_alias="createdBy")
     createdAt: datetime = Field(serialization_alias="createdAt")
     updatedAt: datetime = Field(serialization_alias="updatedAt")
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -197,9 +177,7 @@ class ExecutionResponse(BaseModel):
     completedAt: Optional[datetime] = Field(None, serialization_alias="completedAt")
     createdAt: datetime = Field(serialization_alias="createdAt")
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class ExecutionLogEvent(BaseModel):
@@ -222,9 +200,7 @@ class WarehouseEntryResponse(BaseModel):
     data: Dict[str, Any]
     createdAt: datetime = Field(serialization_alias="createdAt")
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class WarehouseListResponse(BaseModel):
@@ -250,9 +226,7 @@ class QueueItemResponse(BaseModel):
     createdAt: datetime = Field(serialization_alias="createdAt")
     processedAt: Optional[datetime] = Field(None, serialization_alias="processedAt")
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class QueueListResponse(BaseModel):
@@ -266,6 +240,5 @@ class QueueListResponse(BaseModel):
 
 class FactoryMapUpdate(BaseModel):
     """팩토리 맵 업데이트"""
-    viewport: Optional[ViewportConfig] = None
     nodes: Optional[List[WorkflowNodeCreate]] = None
     connections: Optional[List[WorkflowConnectionCreate]] = None

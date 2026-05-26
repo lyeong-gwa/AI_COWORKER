@@ -2,6 +2,7 @@
 Workflow API Routes
 """
 
+from datetime import datetime
 from typing import List, Optional, AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
@@ -13,17 +14,27 @@ import json
 import asyncio
 
 from ...core.database import get_db
+from ...core.exceptions import NotFoundError, ValidationError
 from ...models.workflow import (
     Workflow, WorkflowNode, WorkflowConnection, WorkflowExecution,
-    WorkflowStatus, ExecutionStatus,
+    WorkflowStatus, ExecutionStatus, WarehouseEntry,
 )
 from ...schemas.workflow import (
     WorkflowCreate, WorkflowUpdate,
     ExecutionCreate,
 )
 from ...services.workflow_engine import execute_workflow
+from ...services.audit import log as audit_log
 
 router = APIRouter()
+
+
+async def _safe_reload_jobs():
+    try:
+        from ...core.scheduler import reload_jobs
+        await reload_jobs()
+    except Exception:
+        pass
 
 
 def workflow_node_to_camel(node: WorkflowNode) -> dict:
@@ -35,7 +46,7 @@ def workflow_node_to_camel(node: WorkflowNode) -> dict:
         "aiNodeId": node.ai_node_id,
         "config": node.config,
         "name": node.name,
-        "position": node.position,
+        "orderIndex": node.order_index,
         "configOverrides": node.config_overrides,
         "inputMapping": node.input_mapping,
     }
@@ -61,9 +72,9 @@ def workflow_to_camel(wf: Workflow) -> dict:
         "description": wf.description,
         "status": wf.status.value if wf.status else None,
         "tags": wf.tags,
-        "viewport": wf.viewport,
         "trigger": wf.trigger,
         "variables": wf.variables,
+        "createdBy": wf.created_by,
         "nodes": [workflow_node_to_camel(n) for n in wf.nodes],
         "connections": [workflow_connection_to_camel(c) for c in wf.connections],
         "createdAt": wf.created_at.isoformat() if wf.created_at else None,
@@ -80,6 +91,7 @@ def workflow_summary_to_camel(wf: Workflow) -> dict:
         "status": wf.status.value if wf.status else None,
         "tags": wf.tags,
         "nodeCount": len(wf.nodes),
+        "createdBy": wf.created_by,
         "createdAt": wf.created_at.isoformat() if wf.created_at else None,
         "updatedAt": wf.updated_at.isoformat() if wf.updated_at else None,
     }
@@ -106,7 +118,16 @@ def execution_to_camel(ex: WorkflowExecution) -> dict:
 # Workflow CRUD
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("")
+@router.get(
+    "",
+    summary="워크플로우 목록 조회",
+    description=(
+        "등록된 워크플로우의 요약 정보 목록을 반환한다. "
+        "CLI가 기존 자동화 파이프라인을 파악할 때 첫 번째로 호출하는 엔드포인트. "
+        "``status``, ``q`` 필터와 ``skip``/``limit`` 페이지네이션을 지원한다."
+    ),
+    response_description="camelCase 요약 리스트 (id, name, status, nodeCount 등)",
+)
 async def list_workflows(
     status: Optional[WorkflowStatus] = Query(None, description="상태 필터"),
     q: Optional[str] = Query(None, description="검색어 (이름, 설명)"),
@@ -131,7 +152,14 @@ async def list_workflows(
     return [workflow_summary_to_camel(w) for w in workflows]
 
 
-@router.get("/{workflow_id}")
+@router.get(
+    "/{workflow_id}",
+    summary="워크플로우 상세 조회",
+    description=(
+        "노드·연결선까지 포함한 워크플로우 전체 구조를 반환한다. "
+        "CLI가 기존 워크플로우를 수정·복제할 때 조회용으로 사용."
+    ),
+)
 async def get_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
     """워크플로우 상세 조회"""
     result = await db.execute(
@@ -142,12 +170,25 @@ async def get_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
     workflow = result.scalar_one_or_none()
 
     if not workflow:
-        raise HTTPException(status_code=404, detail="워크플로우를 찾을 수 없습니다")
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
 
     return workflow_to_camel(workflow)
 
 
-@router.post("", status_code=201)
+@router.post(
+    "",
+    status_code=201,
+    summary="워크플로우 생성",
+    description=(
+        "CLI가 새로운 업무자동화 워크플로우를 등록한다. "
+        "``nodes``는 카탈로그(`GET /nodes/catalog`)의 defType 을 참조하며, "
+        "``connections``는 nodeId 간의 DAG 연결을 정의한다. "
+        "position/viewport 필드는 존재하지 않으며 UI는 자동 레이아웃을 사용한다."
+    ),
+)
 async def create_workflow(data: WorkflowCreate, db: AsyncSession = Depends(get_db)):
     """워크플로우 생성"""
     workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
@@ -157,12 +198,12 @@ async def create_workflow(data: WorkflowCreate, db: AsyncSession = Depends(get_d
         name=data.name,
         description=data.description,
         tags=data.tags,
-        viewport=data.viewport.model_dump() if data.viewport else {"x": 0, "y": 0, "zoom": 1},
+        created_by=data.createdBy,
     )
     db.add(workflow)
 
     # 노드 생성
-    for node_data in data.nodes:
+    for idx, node_data in enumerate(data.nodes):
         node = WorkflowNode(
             id=node_data.id,
             workflow_id=workflow_id,
@@ -171,7 +212,7 @@ async def create_workflow(data: WorkflowCreate, db: AsyncSession = Depends(get_d
             ai_node_id=node_data.aiNodeId,
             config=node_data.config,
             name=node_data.name,
-            position={"x": node_data.position.x, "y": node_data.position.y},
+            order_index=node_data.orderIndex if node_data.orderIndex else idx,
             config_overrides=node_data.configOverrides,
             input_mapping=node_data.inputMapping,
         )
@@ -199,6 +240,8 @@ async def create_workflow(data: WorkflowCreate, db: AsyncSession = Depends(get_d
         .where(Workflow.id == workflow_id)
     )
     workflow = result.scalar_one()
+    await audit_log(db, "system", "workflow.create", "workflow", workflow.id, {"name": workflow.name})
+    await _safe_reload_jobs()
     return workflow_to_camel(workflow)
 
 
@@ -217,7 +260,10 @@ async def update_workflow(
     workflow = result.scalar_one_or_none()
 
     if not workflow:
-        raise HTTPException(status_code=404, detail="워크플로우를 찾을 수 없습니다")
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
 
     # 기본 필드 업데이트
     if data.name is not None:
@@ -228,8 +274,6 @@ async def update_workflow(
         workflow.status = data.status
     if data.tags is not None:
         workflow.tags = data.tags
-    if data.viewport is not None:
-        workflow.viewport = data.viewport.model_dump()
     if data.trigger is not None:
         workflow.trigger = data.trigger.model_dump()
     if data.variables is not None:
@@ -242,7 +286,7 @@ async def update_workflow(
             await db.delete(node)
 
         # 새 노드 생성
-        for node_data in data.nodes:
+        for idx, node_data in enumerate(data.nodes):
             node = WorkflowNode(
                 id=node_data.id,
                 workflow_id=workflow_id,
@@ -251,7 +295,7 @@ async def update_workflow(
                 ai_node_id=node_data.aiNodeId,
                 config=node_data.config,
                 name=node_data.name,
-                position={"x": node_data.position.x, "y": node_data.position.y},
+                order_index=node_data.orderIndex if node_data.orderIndex else idx,
                 config_overrides=node_data.configOverrides,
                 input_mapping=node_data.inputMapping,
             )
@@ -285,17 +329,26 @@ async def update_workflow(
         .where(Workflow.id == workflow_id)
     )
     workflow = result.scalar_one()
+    await _safe_reload_jobs()
     return workflow_to_camel(workflow)
 
 
-@router.delete("/{workflow_id}", status_code=204)
+@router.delete(
+    "/{workflow_id}",
+    status_code=204,
+    summary="워크플로우 삭제",
+    description="워크플로우 및 관련 노드/연결선/실행 이력을 모두 삭제한다.",
+)
 async def delete_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
     """워크플로우 삭제"""
     result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
     workflow = result.scalar_one_or_none()
 
     if not workflow:
-        raise HTTPException(status_code=404, detail="워크플로우를 찾을 수 없습니다")
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
 
     await db.delete(workflow)
     await db.commit()
@@ -305,7 +358,15 @@ async def delete_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
 # Workflow Execution
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("/{workflow_id}/execute")
+@router.post(
+    "/{workflow_id}/execute",
+    summary="워크플로우 실행 (레거시 호환)",
+    description=(
+        "기존 UI/코드 호환 경로. Phase 2b에서 신설한 "
+        "``POST /{workflow_id}/run`` 과 동일하게 백그라운드 실행을 스케줄하고 "
+        "전체 실행 레코드(camelCase)를 즉시 반환한다."
+    ),
+)
 async def execute_workflow_endpoint(
     workflow_id: str,
     request: ExecutionCreate,
@@ -321,10 +382,18 @@ async def execute_workflow_endpoint(
     workflow = result.scalar_one_or_none()
 
     if not workflow:
-        raise HTTPException(status_code=404, detail="워크플로우를 찾을 수 없습니다")
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
 
     if workflow.status != WorkflowStatus.ACTIVE:
-        raise HTTPException(status_code=400, detail="비활성 워크플로우는 실행할 수 없습니다")
+        raise ValidationError(
+            "비활성 워크플로우는 실행할 수 없습니다",
+            code="WORKFLOW_NOT_ACTIVE",
+            status_code=400,
+            details={"workflowId": workflow_id, "status": workflow.status.value},
+        )
 
     # 실행 레코드 생성
     execution = WorkflowExecution(
@@ -337,13 +406,105 @@ async def execute_workflow_endpoint(
     await db.commit()
     await db.refresh(execution)
 
+    # 감사 로그
+    await audit_log(db, "system", "workflow.execute", "workflow", workflow_id, {"executionId": execution.id})
+
     # 백그라운드에서 실행
     background_tasks.add_task(execute_workflow, execution.id)
 
     return execution_to_camel(execution)
 
 
-@router.get("/{workflow_id}/executions")
+# ── Phase 2b: CLI 친화 /run 엔드포인트 ─────────────────────────────────────
+# 설계서 섹션 5.2 기준으로 CLI는 instanceId 만 즉시 받고 SSE 스트림 또는
+# 인스턴스 조회 엔드포인트로 후속 상태를 관찰한다.
+
+@router.post(
+    "/{workflow_id}/run",
+    status_code=202,
+    summary="워크플로우 백그라운드 실행 시작",
+    description=(
+        "CLI가 워크플로우를 비동기 실행하는 표준 진입점. "
+        "실제 실행은 FastAPI BackgroundTasks 로 스케줄되고, 응답은 "
+        "``{instanceId, workflowId, status:\"queued\", createdAt}`` 을 즉시 반환한다. "
+        "진행 상황은 ``GET /api/v1/warehouse/instances/{instanceId}/stream`` "
+        "(SSE) 또는 ``GET /api/v1/workflows/executions/{instanceId}`` 로 관찰한다. "
+        "HTTP 202 Accepted."
+    ),
+    response_description=(
+        "접수 확인. status 는 항상 ``queued`` 로 반환되며, 실행 엔진이 "
+        "DB에 ``running``/``completed``/``failed`` 로 갱신한다."
+    ),
+)
+async def run_workflow(
+    workflow_id: str,
+    request: ExecutionCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """워크플로우 백그라운드 실행 시작 — instanceId 즉시 반환."""
+    result = await db.execute(
+        select(Workflow)
+        .options(selectinload(Workflow.nodes), selectinload(Workflow.connections))
+        .where(Workflow.id == workflow_id)
+    )
+    workflow = result.scalar_one_or_none()
+
+    if not workflow:
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
+
+    if workflow.status != WorkflowStatus.ACTIVE:
+        raise ValidationError(
+            "비활성 워크플로우는 실행할 수 없습니다",
+            code="WORKFLOW_NOT_ACTIVE",
+            status_code=400,
+            details={"workflowId": workflow_id, "status": workflow.status.value},
+        )
+
+    instance_id = f"exec-{uuid.uuid4().hex[:8]}"
+    execution = WorkflowExecution(
+        id=instance_id,
+        workflow_id=workflow_id,
+        status=ExecutionStatus.PENDING,
+        input_data=request.inputData or {},
+    )
+    db.add(execution)
+    await db.commit()
+    await db.refresh(execution)
+
+    await audit_log(
+        db,
+        "cli",
+        "workflow.run",
+        "workflow",
+        workflow_id,
+        {"instanceId": instance_id},
+    )
+
+    # 백그라운드 실행 스케줄 — 엔진 내부는 수정하지 않는다.
+    background_tasks.add_task(execute_workflow, instance_id)
+
+    # 설계서 지정 페이로드 — 최소 형태로 즉시 반환.
+    # DB의 ExecutionStatus.PENDING 을 CLI 계약상 "queued" 로 alias.
+    return {
+        "instanceId": instance_id,
+        "workflowId": workflow_id,
+        "status": "queued",
+        "createdAt": execution.created_at.isoformat() if execution.created_at else None,
+    }
+
+
+@router.get(
+    "/{workflow_id}/executions",
+    summary="워크플로우 실행 이력 (레거시 경로)",
+    description=(
+        "``GET /{workflow_id}/instances`` 의 동의어. 최근 실행 레코드를 "
+        "``createdAt`` 내림차순으로 반환한다."
+    ),
+)
 async def list_executions(
     workflow_id: str,
     status: Optional[ExecutionStatus] = Query(None),
@@ -351,6 +512,35 @@ async def list_executions(
     db: AsyncSession = Depends(get_db),
 ):
     """워크플로우 실행 이력"""
+    query = select(WorkflowExecution).where(
+        WorkflowExecution.workflow_id == workflow_id
+    )
+
+    if status:
+        query = query.where(WorkflowExecution.status == status)
+
+    query = query.order_by(WorkflowExecution.created_at.desc()).limit(limit)
+    result = await db.execute(query)
+
+    executions = result.scalars().all()
+    return [execution_to_camel(ex) for ex in executions]
+
+
+@router.get(
+    "/{workflow_id}/instances",
+    summary="워크플로우 인스턴스 목록",
+    description=(
+        "CLI 계약용 별칭. 동일한 데이터를 반환하나 '인스턴스' 용어를 사용하는 "
+        "설계서 섹션 5.2 와 정합을 맞춘다."
+    ),
+)
+async def list_instances(
+    workflow_id: str,
+    status: Optional[ExecutionStatus] = Query(None),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """워크플로우 인스턴스 목록 (executions 와 동일 데이터)."""
     query = select(WorkflowExecution).where(
         WorkflowExecution.workflow_id == workflow_id
     )
@@ -374,7 +564,10 @@ async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db)):
     execution = result.scalar_one_or_none()
 
     if not execution:
-        raise HTTPException(status_code=404, detail="실행 기록을 찾을 수 없습니다")
+        raise NotFoundError(
+            "실행 기록을 찾을 수 없습니다",
+            details={"executionId": execution_id},
+        )
 
     return execution_to_camel(execution)
 
@@ -388,7 +581,10 @@ async def stream_execution(execution_id: str, db: AsyncSession = Depends(get_db)
     execution = result.scalar_one_or_none()
 
     if not execution:
-        raise HTTPException(status_code=404, detail="실행 기록을 찾을 수 없습니다")
+        raise NotFoundError(
+            "실행 기록을 찾을 수 없습니다",
+            details={"executionId": execution_id},
+        )
 
     async def event_generator() -> AsyncGenerator[str, None]:
         """SSE 이벤트 생성기"""
@@ -433,6 +629,167 @@ async def stream_execution(execution_id: str, db: AsyncSession = Depends(get_db)
     )
 
 
+@router.delete(
+    "/executions/{execution_id}",
+    summary="실행 기록 단건 삭제",
+    description=(
+        "완료·실패·취소된 실행 기록 1건과 관련 창고(warehouse_entries)를 "
+        "한 트랜잭션으로 삭제한다. RUNNING/PENDING/QUEUED 상태는 409로 차단. "
+        "``?force=true`` 쿼리로 상태 검사를 우회할 수 있다."
+    ),
+)
+async def delete_execution(
+    execution_id: str,
+    force: bool = Query(False, description="상태 검사 우회"),
+    db: AsyncSession = Depends(get_db),
+):
+    """실행 기록 단건 삭제 (cascade: warehouse_entries)"""
+    from sqlalchemy import delete as sql_delete
+
+    result = await db.execute(
+        select(WorkflowExecution).where(WorkflowExecution.id == execution_id)
+    )
+    execution = result.scalar_one_or_none()
+
+    if not execution:
+        raise NotFoundError(
+            "실행 기록을 찾을 수 없습니다",
+            details={"executionId": execution_id},
+        )
+
+    if not force and execution.status in [
+        ExecutionStatus.PENDING,
+        ExecutionStatus.RUNNING,
+    ]:
+        raise ValidationError(
+            "실행 중인 기록은 삭제할 수 없습니다. ?force=true 로 우회 가능합니다.",
+            code="EXECUTION_RUNNING",
+            status_code=409,
+            details={"executionId": execution_id, "status": execution.status.value},
+        )
+
+    # warehouse_entries 먼저 삭제 (명시 DELETE, cascade 의존 X)
+    await db.execute(
+        sql_delete(WarehouseEntry).where(WarehouseEntry.execution_id == execution_id)
+    )
+    # 본체 삭제
+    await db.delete(execution)
+    await db.commit()
+
+    await audit_log(
+        db,
+        "system",
+        "workflow.execution.delete",
+        "workflow_execution",
+        execution_id,
+        {"executionId": execution_id, "force": force},
+    )
+
+    return {"message": "삭제되었습니다", "id": execution_id}
+
+
+@router.post(
+    "/{workflow_id}/executions/cleanup",
+    summary="워크플로우 실행 기록 일괄 정리",
+    description=(
+        "지정한 워크플로우의 실행 기록을 조건에 따라 일괄 삭제한다. "
+        "``dryRun=true`` 이면 카운트만 반환, 실제 삭제하지 않는다."
+    ),
+)
+async def cleanup_executions(
+    workflow_id: str,
+    olderThanDays: int = Query(30, ge=0, description="N일 이전 created_at 대상"),
+    status: Optional[str] = Query(
+        "completed,failed,cancelled",
+        description="대상 상태 (comma-separated)",
+    ),
+    dryRun: bool = Query(False, description="true면 카운트만 반환, 실제 삭제 안 함"),
+    db: AsyncSession = Depends(get_db),
+):
+    """워크플로우 실행 기록 일괄 정리."""
+    from datetime import timedelta
+    from sqlalchemy import delete as sql_delete
+
+    # workflow 존재 확인
+    wf_result = await db.execute(
+        select(Workflow).where(Workflow.id == workflow_id)
+    )
+    if not wf_result.scalar_one_or_none():
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
+
+    cutoff = datetime.utcnow() - timedelta(days=olderThanDays)
+
+    # 대상 상태 파싱
+    raw_statuses = [s.strip() for s in (status or "").split(",") if s.strip()]
+    target_statuses: list[ExecutionStatus] = []
+    for s in raw_statuses:
+        try:
+            target_statuses.append(ExecutionStatus(s))
+        except ValueError:
+            pass
+    if not target_statuses:
+        target_statuses = [ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.CANCELLED]
+
+    # 대상 execution ID 조회
+    q = (
+        select(WorkflowExecution.id)
+        .where(WorkflowExecution.workflow_id == workflow_id)
+        .where(WorkflowExecution.created_at < cutoff)
+        .where(WorkflowExecution.status.in_(target_statuses))
+    )
+    rows = (await db.execute(q)).scalars().all()
+    candidate_ids = list(rows)
+    candidate_count = len(candidate_ids)
+
+    deleted_count = 0
+    warehouse_deleted = 0
+
+    if not dryRun and candidate_ids:
+        # warehouse_entries 먼저 삭제
+        we_result = await db.execute(
+            sql_delete(WarehouseEntry)
+            .where(WarehouseEntry.execution_id.in_(candidate_ids))
+            .returning(WarehouseEntry.id)
+        )
+        warehouse_deleted = len(we_result.all())
+
+        # executions 삭제
+        ex_result = await db.execute(
+            sql_delete(WorkflowExecution)
+            .where(WorkflowExecution.id.in_(candidate_ids))
+            .returning(WorkflowExecution.id)
+        )
+        deleted_count = len(ex_result.all())
+        await db.commit()
+
+        await audit_log(
+            db,
+            "system",
+            "workflow.executions.cleanup",
+            "workflow",
+            workflow_id,
+            {
+                "deletedCount": deleted_count,
+                "warehouseEntriesDeleted": warehouse_deleted,
+                "olderThanDays": olderThanDays,
+                "statuses": [s.value for s in target_statuses],
+                "dryRun": dryRun,
+            },
+        )
+
+    return {
+        "candidateCount": candidate_count,
+        "deletedCount": deleted_count,
+        "warehouseEntriesDeleted": warehouse_deleted,
+        "dryRun": dryRun,
+        "olderThanDays": olderThanDays,
+        "statuses": [s.value for s in target_statuses],
+    }
+
+
 @router.post("/executions/{execution_id}/cancel")
 async def cancel_execution(execution_id: str, db: AsyncSession = Depends(get_db)):
     """실행 취소"""
@@ -442,10 +799,18 @@ async def cancel_execution(execution_id: str, db: AsyncSession = Depends(get_db)
     execution = result.scalar_one_or_none()
 
     if not execution:
-        raise HTTPException(status_code=404, detail="실행 기록을 찾을 수 없습니다")
+        raise NotFoundError(
+            "실행 기록을 찾을 수 없습니다",
+            details={"executionId": execution_id},
+        )
 
     if execution.status not in [ExecutionStatus.PENDING, ExecutionStatus.RUNNING]:
-        raise HTTPException(status_code=400, detail="취소할 수 없는 상태입니다")
+        raise ValidationError(
+            "취소할 수 없는 상태입니다",
+            code="INVALID_STATE_TRANSITION",
+            status_code=400,
+            details={"executionId": execution_id, "status": execution.status.value},
+        )
 
     execution.status = ExecutionStatus.CANCELLED
     await db.commit()

@@ -3,8 +3,9 @@ Factory Map API Routes - Factorio-style singleton factory map
 """
 
 from typing import Optional, AsyncGenerator, List
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Body
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
@@ -28,6 +29,11 @@ router = APIRouter()
 FACTORY_MAP_ID = "factory-main"
 
 
+class DeleteEntriesBody(BaseModel):
+    """창고 항목 선택 삭제 요청 바디"""
+    entryIds: List[str]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Serializers (reused from workflows.py pattern)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -41,7 +47,7 @@ def workflow_node_to_camel(node: WorkflowNode) -> dict:
         "aiNodeId": node.ai_node_id,
         "config": node.config,
         "name": node.name,
-        "position": node.position,
+        "orderIndex": node.order_index,
         "configOverrides": node.config_overrides,
         "inputMapping": node.input_mapping,
     }
@@ -67,9 +73,9 @@ def factory_map_to_camel(wf: Workflow) -> dict:
         "description": wf.description,
         "status": wf.status.value if wf.status else None,
         "tags": wf.tags,
-        "viewport": wf.viewport,
         "trigger": wf.trigger,
         "variables": wf.variables,
+        "createdBy": wf.created_by,
         "nodes": [workflow_node_to_camel(n) for n in wf.nodes],
         "connections": [workflow_connection_to_camel(c) for c in wf.connections],
         "createdAt": wf.created_at.isoformat() if wf.created_at else None,
@@ -124,10 +130,10 @@ async def _get_or_create_factory(db: AsyncSession) -> Workflow:
             name="공장 맵",
             description="Factorio 스타일 싱글톤 공장 맵",
             status=WorkflowStatus.ACTIVE,
-            viewport={"x": 0, "y": 0, "zoom": 1},
             trigger={"type": "manual", "config": {}},
             variables={},
             tags=[],
+            created_by="cli",
         )
         db.add(wf)
         await db.commit()
@@ -154,19 +160,15 @@ async def update_factory_map(
     data: FactoryMapUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """팩토리 맵 저장 (노드, 연결, 뷰포트)"""
+    """팩토리 맵 저장 (노드, 연결)"""
     wf = await _get_or_create_factory(db)
-
-    # 뷰포트 업데이트
-    if data.viewport is not None:
-        wf.viewport = data.viewport.model_dump()
 
     # 노드 업데이트 (전체 교체)
     if data.nodes is not None:
         for node in wf.nodes:
             await db.delete(node)
 
-        for node_data in data.nodes:
+        for idx, node_data in enumerate(data.nodes):
             node = WorkflowNode(
                 id=node_data.id,
                 workflow_id=FACTORY_MAP_ID,
@@ -175,7 +177,7 @@ async def update_factory_map(
                 ai_node_id=node_data.aiNodeId,
                 config=node_data.config,
                 name=node_data.name,
-                position={"x": node_data.position.x, "y": node_data.position.y},
+                order_index=node_data.orderIndex if node_data.orderIndex else idx,
                 config_overrides=node_data.configOverrides,
                 input_mapping=node_data.inputMapping,
             )
@@ -385,19 +387,29 @@ async def get_warehouse_data(
     node_id: str,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    execution_id: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """특정 결과 노드(창고)의 축적 데이터 조회"""
-    # 총 개수 조회
+    """특정 결과 노드(창고)의 축적 데이터 조회.
+
+    execution_id 가 주어지면 해당 실행분만 필터링 (1실행 1결과 원칙).
+    주어지지 않으면 기존 동작(누적 전체) 유지.
+    """
+    base_filter = WarehouseEntry.node_instance_id == node_id
+    if execution_id is not None:
+        from sqlalchemy import and_
+        base_filter = and_(base_filter, WarehouseEntry.execution_id == execution_id)
+
+    # 총 개수 조회 (동일 필터 적용)
     count_result = await db.execute(
-        select(func.count()).where(WarehouseEntry.node_instance_id == node_id)
+        select(func.count()).where(base_filter)
     )
     total = count_result.scalar() or 0
 
     # 데이터 조회
     query = (
         select(WarehouseEntry)
-        .where(WarehouseEntry.node_instance_id == node_id)
+        .where(base_filter)
         .order_by(WarehouseEntry.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -413,10 +425,22 @@ async def get_warehouse_data(
 
 
 @router.delete("/warehouse/{node_id}", status_code=204)
-async def clear_warehouse(node_id: str, db: AsyncSession = Depends(get_db)):
-    """창고 비우기"""
+async def clear_warehouse(
+    node_id: str,
+    execution_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """창고 비우기.
+
+    execution_id 가 주어지면 해당 실행분만 삭제, 없으면 전체 삭제.
+    """
+    base_filter = WarehouseEntry.node_instance_id == node_id
+    if execution_id is not None:
+        from sqlalchemy import and_
+        base_filter = and_(base_filter, WarehouseEntry.execution_id == execution_id)
+
     result = await db.execute(
-        select(WarehouseEntry).where(WarehouseEntry.node_instance_id == node_id)
+        select(WarehouseEntry).where(base_filter)
     )
     entries = result.scalars().all()
 
@@ -429,14 +453,18 @@ async def clear_warehouse(node_id: str, db: AsyncSession = Depends(get_db)):
 @router.delete("/warehouse/{node_id}/entries", status_code=204)
 async def delete_warehouse_entries(
     node_id: str,
-    entry_ids: List[str] = Query(..., alias="ids"),
+    body: DeleteEntriesBody = Body(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """창고 항목 선택 삭제"""
+    """창고 항목 선택 삭제.
+
+    요청 바디: {"entryIds": ["wh-xxx", "wh-yyy", ...]}
+    응답: 204 No Content
+    """
     result = await db.execute(
         select(WarehouseEntry).where(
             WarehouseEntry.node_instance_id == node_id,
-            WarehouseEntry.id.in_(entry_ids),
+            WarehouseEntry.id.in_(body.entryIds),
         )
     )
     entries = result.scalars().all()

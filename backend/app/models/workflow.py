@@ -6,7 +6,7 @@ Workflow Models - 워크플로우 (ATOMIC 패턴의 Organism)
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from sqlalchemy import String, Text, DateTime, Boolean, Enum as SQLEnum, JSON, ForeignKey
+from sqlalchemy import String, Text, DateTime, Boolean, Enum as SQLEnum, JSON, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
 
@@ -52,13 +52,6 @@ class Workflow(Base):
         nullable=False,
     )
 
-    # 캔버스 뷰포트 설정
-    viewport: Mapped[Dict[str, Any]] = mapped_column(
-        JSON,
-        default=lambda: {"x": 0, "y": 0, "zoom": 1},
-        nullable=False,
-    )
-
     # 트리거 설정
     trigger: Mapped[Dict[str, Any]] = mapped_column(
         JSON,
@@ -71,6 +64,9 @@ class Workflow(Base):
 
     # 메타데이터
     tags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # 워크플로우 생성 주체 ('cli' | 'web')
+    created_by: Mapped[str] = mapped_column(String(20), default='cli', nullable=False)
 
     # 타임스탬프
     created_at: Mapped[datetime] = mapped_column(
@@ -128,12 +124,8 @@ class WorkflowNode(Base):
     # 노드 이름 (인스턴스별 커스텀 이름)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    # 캔버스 위치 (position: {x, y} 형태로 저장)
-    position: Mapped[Dict[str, float]] = mapped_column(
-        JSON,
-        default=lambda: {"x": 0, "y": 0},
-        nullable=False,
-    )
+    # 형제 노드 안정 순번 (자동 레이아웃에서 tie-break용)
+    order_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # 노드별 설정 오버라이드
     config_overrides: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
@@ -225,6 +217,7 @@ class WarehouseEntry(Base):
     node_instance_id: Mapped[str] = mapped_column(String(50), index=True)  # WorkflowNode.id
     execution_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     data: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    dedup_key: Mapped[Optional[str]] = mapped_column(String(128), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

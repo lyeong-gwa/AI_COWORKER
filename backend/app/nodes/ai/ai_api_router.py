@@ -10,6 +10,7 @@ from ...models.api_definition import ApiDefinition
 from ...services.llm import chat
 from ..registry import NodeHandlerRegistry
 from ..base import NodeHandler, ExecutionContext
+from ..common import render_url_or_header
 
 
 @NodeHandlerRegistry.register
@@ -192,12 +193,12 @@ class AiApiRouterHandler(NodeHandler):
             }
 
         # 8. Execute API call
-        url = ctx.render_template(matched_def.url_template, parameters)
+        url = render_url_or_header(matched_def.url_template, parameters, ctx.render_template)
 
         rendered_headers = {}
         if isinstance(matched_def.headers, dict):
             rendered_headers = {
-                k: ctx.render_template(str(v), parameters)
+                k: render_url_or_header(str(v), parameters, ctx.render_template)
                 for k, v in matched_def.headers.items()
             }
 
@@ -206,13 +207,13 @@ class AiApiRouterHandler(NodeHandler):
         auth_config = matched_def.auth_config or {}
         if auth_type == "bearer":
             token = auth_config.get("token", "")
-            rendered_token = ctx.render_template(token, parameters)
+            rendered_token = render_url_or_header(token, parameters, ctx.render_template)
             if rendered_token:
                 rendered_headers["Authorization"] = f"Bearer {rendered_token}"
         elif auth_type == "api_key":
             key_name = auth_config.get("headerName", "X-API-Key")
             key_value = auth_config.get("apiKey", "")
-            rendered_headers[key_name] = ctx.render_template(key_value, parameters)
+            rendered_headers[key_name] = render_url_or_header(key_value, parameters, ctx.render_template)
 
         # Remove empty headers
         rendered_headers = {

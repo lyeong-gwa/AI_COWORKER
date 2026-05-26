@@ -4,7 +4,7 @@ AI Node Schemas (프론트엔드 타입에 맞춤 - camelCase)
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OutputEnforcementConfig(BaseModel):
@@ -98,9 +98,7 @@ class NodeResponse(BaseModel):
     createdAt: datetime = Field(serialization_alias="createdAt")
     updatedAt: datetime = Field(serialization_alias="updatedAt")
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     @classmethod
     def from_orm_with_camel(cls, obj):

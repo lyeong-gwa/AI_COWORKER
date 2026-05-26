@@ -141,6 +141,25 @@ def create_safe_import():
     return safe_import
 
 
+def _inplacevar_guard(op, x, y):
+    """in-place operator 가드 (x op= y)"""
+    if op == '+=':
+        return x + y
+    if op == '-=':
+        return x - y
+    if op == '*=':
+        return x * y
+    if op == '/=':
+        return x / y
+    if op == '//=':
+        return x // y
+    if op == '%=':
+        return x % y
+    if op == '**=':
+        return x ** y
+    raise NotImplementedError(f"in-place op {op} not supported")
+
+
 def create_safe_builtins() -> Dict[str, Any]:
     """안전한 내장 함수 딕셔너리 생성"""
     import builtins
@@ -156,6 +175,10 @@ def create_safe_builtins() -> Dict[str, Any]:
     safe['_getitem_'] = default_guarded_getitem
     safe['_iter_unpack_sequence_'] = guarded_iter_unpack_sequence
     safe['_unpack_sequence_'] = guarded_unpack_sequence
+    # 속성 접근 가드 (메서드 호출에 필요: dict.get, list.append 등)
+    safe['_getattr_'] = getattr
+    safe['_write_'] = lambda x: x
+    safe['_inplacevar_'] = _inplacevar_guard
 
     # 안전한 import 함수
     safe['__import__'] = create_safe_import()
@@ -263,13 +286,17 @@ class SandboxedExecutor:
                 mode='exec',
             )
 
-            if byte_code.errors:
-                return ExecutionResult(
-                    success=False,
-                    error='\n'.join(byte_code.errors),
-                    error_type='CompileError',
-                    logs=self._logs,
-                )
+            # RestrictedPython 버전에 따라 CompileResult 또는 code 객체 반환
+            compiled_code = byte_code
+            if hasattr(byte_code, 'errors'):
+                if byte_code.errors:
+                    return ExecutionResult(
+                        success=False,
+                        error='\n'.join(byte_code.errors),
+                        error_type='CompileError',
+                        logs=self._logs,
+                    )
+                compiled_code = byte_code.code
 
             # 3. 실행 환경 구성
             safe_builtins_dict = create_safe_builtins()
@@ -284,7 +311,7 @@ class SandboxedExecutor:
             local_env = {}
 
             # 4. 타임아웃과 함께 실행
-            exec(byte_code.code, global_env, local_env)
+            exec(compiled_code, global_env, local_env)
 
             # 5. 결과 추출
             execution_time = (time.perf_counter() - start_time) * 1000

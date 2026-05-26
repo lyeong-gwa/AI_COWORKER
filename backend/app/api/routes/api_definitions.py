@@ -10,6 +10,7 @@ from sqlalchemy import select
 from typing import Optional
 
 from ...core.database import get_db
+from ...core.exceptions import NotFoundError
 from ...models.api_definition import ApiDefinition
 from ...schemas.api_definition import (
     ApiDefinitionCreate,
@@ -134,7 +135,14 @@ async def capture_response_schema(request: ApiCaptureRequest):
 
 # ── CRUD Endpoints ──────────────────────────────────────────────────────────
 
-@router.get("")
+@router.get(
+    "",
+    summary="외부 API 명세 목록",
+    description=(
+        "CLI 가 등록한 외부 API 호출 템플릿(API Definition)을 반환한다. "
+        "``api-call`` / ``ai-api-router`` 노드에서 ``apiDefinitionId`` 로 참조된다."
+    ),
+)
 async def list_api_definitions(
     category: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -159,11 +167,22 @@ async def get_api_definition(
     )
     api_def = result.scalar_one_or_none()
     if not api_def:
-        raise HTTPException(status_code=404, detail="API 정의를 찾을 수 없습니다")
+        raise NotFoundError(
+            "API 정의를 찾을 수 없습니다",
+            details={"apiDefinitionId": api_def_id},
+        )
     return to_camel_response(api_def)
 
 
-@router.post("")
+@router.post(
+    "",
+    summary="외부 API 명세 등록",
+    description=(
+        "CLI가 새로운 외부 API 호출 템플릿을 등록한다. "
+        "``method``, ``urlTemplate``, ``headers``, ``bodyTemplate`` 등을 정의하며, "
+        "워크플로우의 ``api-call`` / ``api-start`` 노드가 ``apiDefinitionId`` 로 참조한다."
+    ),
+)
 async def create_api_definition(
     data: ApiDefinitionCreate,
     db: AsyncSession = Depends(get_db),
@@ -192,7 +211,10 @@ async def update_api_definition(
     )
     api_def = result.scalar_one_or_none()
     if not api_def:
-        raise HTTPException(status_code=404, detail="API 정의를 찾을 수 없습니다")
+        raise NotFoundError(
+            "API 정의를 찾을 수 없습니다",
+            details={"apiDefinitionId": api_def_id},
+        )
 
     update_data = data.model_dump(exclude_unset=True)
     snake_data = to_snake_case(update_data)
@@ -216,7 +238,10 @@ async def delete_api_definition(
     )
     api_def = result.scalar_one_or_none()
     if not api_def:
-        raise HTTPException(status_code=404, detail="API 정의를 찾을 수 없습니다")
+        raise NotFoundError(
+            "API 정의를 찾을 수 없습니다",
+            details={"apiDefinitionId": api_def_id},
+        )
 
     await db.delete(api_def)
     await db.commit()
@@ -237,7 +262,10 @@ async def execute_api_definition(
     )
     api_def = result.scalar_one_or_none()
     if not api_def:
-        raise HTTPException(status_code=404, detail="API 정의를 찾을 수 없습니다")
+        raise NotFoundError(
+            "API 정의를 찾을 수 없습니다",
+            details={"apiDefinitionId": api_def_id},
+        )
 
     start_time = time.perf_counter()
     logs: list[str] = []

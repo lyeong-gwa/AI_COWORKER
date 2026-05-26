@@ -6,7 +6,7 @@ Chat API Schemas
 """
 
 from typing import Optional, Dict, Any, List, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 
@@ -48,8 +48,8 @@ class ChatMessageRequest(BaseModel):
         description="지식 베이스 필터 상태 (category, tags, visibleDocIds)"
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "content": "이 태스크의 상태를 '진행 중'으로 변경해줘",
                 "context": {
@@ -61,6 +61,7 @@ class ChatMessageRequest(BaseModel):
                 "action": "modify"
             }
         }
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,8 +94,8 @@ class ChatMessageResponse(BaseModel):
     # 세션 정보
     sessionId: str = Field(..., description="세션 ID")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "id": "msg-456",
                 "role": "assistant",
@@ -110,6 +111,7 @@ class ChatMessageResponse(BaseModel):
                 "sessionId": "session-abc"
             }
         }
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

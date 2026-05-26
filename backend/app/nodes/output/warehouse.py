@@ -5,6 +5,7 @@ from typing import Any, Dict
 from ...models.workflow import WarehouseEntry
 from ..registry import NodeHandlerRegistry
 from ..base import NodeHandler, ExecutionContext
+from ..common import compute_dedup_key
 
 
 @NodeHandlerRegistry.register
@@ -22,17 +23,23 @@ class WarehouseHandler(NodeHandler):
     ) -> Any:
         output = input_data
 
-        # 창고에 축적
-        try:
-            entry = WarehouseEntry(
-                id=f"wh-{uuid.uuid4().hex[:8]}",
-                node_instance_id=node.id,
-                execution_id=ctx.execution_id,
-                data=output if isinstance(output, dict) else {"value": output},
-            )
-            ctx.db.add(entry)
-        except Exception:
-            pass  # 창고 저장 실패해도 실행은 계속
+        config = node.config or {}
+        if not config.get("skipWarehouse"):
+            dedup_template = config.get("dedupKeyTemplate")
+            dedup_key = compute_dedup_key(dedup_template, input_data, ctx.render_template)
+
+            # 창고에 축적
+            try:
+                entry = WarehouseEntry(
+                    id=f"wh-{uuid.uuid4().hex[:8]}",
+                    node_instance_id=node.id,
+                    execution_id=ctx.execution_id,
+                    data=output if isinstance(output, dict) else {"value": output},
+                    dedup_key=dedup_key,
+                )
+                ctx.db.add(entry)
+            except Exception:
+                pass  # 창고 저장 실패해도 실행은 계속
 
         return output
 

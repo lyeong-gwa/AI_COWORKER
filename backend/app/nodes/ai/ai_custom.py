@@ -197,12 +197,19 @@ class AiCustomHandler(NodeHandler):
         prompt = config.get('prompt', '')
         rendered_prompt = ctx.render_template(prompt, input_data)
 
+        # systemPrompt가 있으면 system role로 분리 전달 (템플릿 변수 치환 포함)
+        system_prompt_raw = config.get('systemPrompt') or config.get('system_prompt')
+        rendered_system_prompt = None
+        if system_prompt_raw:
+            rendered_system_prompt = ctx.render_template(system_prompt_raw, input_data)
+
         response, _ = await call_llm(
             prompt=rendered_prompt,
             provider=config.get('provider', 'openai'),
             model=config.get('model', 'gpt-4o-mini'),
             temperature=config.get('temperature', 0.7),
             max_tokens=config.get('maxTokens', 2000),
+            system_prompt=rendered_system_prompt,
         )
 
         return {"response": response}

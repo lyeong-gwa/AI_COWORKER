@@ -19,7 +19,7 @@ from .workflow import (
     WorkflowNodeCreate, WorkflowNodeResponse,
     WorkflowConnectionCreate, WorkflowConnectionResponse,
     ExecutionCreate, ExecutionResponse, ExecutionLogEvent,
-    TriggerConfig, ViewportConfig, Position,
+    TriggerConfig,
 )
 from .common import PaginatedResponse, ErrorResponse
 from .api_definition import (
@@ -29,6 +29,13 @@ from .api_definition import (
     ApiDefinitionUpdate,
     ApiTestRequest,
     ApiCaptureRequest,
+)
+from .instance_db import (
+    InstanceDBCreate,
+    InstanceDBUpdate,
+    InstanceDBResponse,
+    InstanceDBRecordResponse,
+    RecordListResponse,
 )
 
 __all__ = [
@@ -46,11 +53,14 @@ __all__ = [
     'WorkflowNodeCreate', 'WorkflowNodeResponse',
     'WorkflowConnectionCreate', 'WorkflowConnectionResponse',
     'ExecutionCreate', 'ExecutionResponse', 'ExecutionLogEvent',
-    'TriggerConfig', 'ViewportConfig', 'Position',
+    'TriggerConfig',
     # Common
     'PaginatedResponse', 'ErrorResponse',
     # ApiDefinition
     'ApiParamSchema', 'ResponseFieldSchema',
     'ApiDefinitionCreate', 'ApiDefinitionUpdate',
     'ApiTestRequest', 'ApiCaptureRequest',
+    # InstanceDB
+    'InstanceDBCreate', 'InstanceDBUpdate', 'InstanceDBResponse',
+    'InstanceDBRecordResponse', 'RecordListResponse',
 ]

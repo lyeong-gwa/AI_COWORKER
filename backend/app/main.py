@@ -1,7 +1,7 @@
 """
 AI 업무도우미 Backend API
 
-FastAPI 기반 백엔드 서버 (v1.2 - references in API response)
+FastAPI 기반 백엔드 서버 (v1.3 - excel export node)
 """
 
 from contextlib import asynccontextmanager
@@ -12,6 +12,7 @@ import os
 
 from .core.config import settings
 from .core.database import init_db
+from .core.exceptions import register_exception_handlers
 from .api import api_router
 
 
@@ -79,22 +80,40 @@ async def lifespan(app: FastAPI):
     await init_db()
     print("[OK] 데이터베이스 초기화 완료")
 
-    # 시드 데이터 생성
-    from .seed import seed_database
-    await seed_database()
-
     # 좀비 큐/실행 정리 (이전 서버 비정상 종료 시 잔존 데이터)
     await _cleanup_zombie_state()
+
+    # 스케줄러 데몬 기동
+    try:
+        from .core.scheduler import start_scheduler
+        await start_scheduler()
+    except Exception as e:
+        print(f"[SCHED] 기동 실패: {e}")
 
     yield
 
     # 종료 시
+    try:
+        from .core.scheduler import shutdown_scheduler
+        await shutdown_scheduler()
+    except Exception:
+        pass
     print("[BYE] 서버 종료")
 
 
 async def _cleanup_zombie_state():
-    """서버 시작 시 이전 실행의 좀비 상태 정리"""
+    """서버 시작 시 이전 실행의 좀비 상태 정리 (Phase 4b 확장).
+
+    서버가 실행 중인 인스턴스가 있는 채로 재시작되면 in-memory 엔진은 죽지만
+    DB 의 ``status='RUNNING'`` 또는 ``status='PENDING'`` 행은 영원히 남아
+    SSE 구독자가 무한 대기하게 된다. 여기서 모두 ``FAILED`` 로 마킹하고
+    ``completed_at`` 을 기록하여 '서버 재시작으로 인한 강제 종료' 안내를 남긴다.
+    """
+    from datetime import datetime
+    from sqlalchemy import update, select
+
     from .core.database import async_session_maker
+    from .models.workflow import WorkflowExecution, ExecutionStatus
     from sqlalchemy import text
 
     async with async_session_maker() as db:
@@ -102,18 +121,29 @@ async def _cleanup_zombie_state():
         r1 = await db.execute(
             text("DELETE FROM node_queue_items WHERE status IN ('PROCESSING', 'PENDING')")
         )
-        # 2) 좀비 실행 FAILED 처리 (RUNNING 상태로 남은 것)
-        r2 = await db.execute(
-            text(
-                "UPDATE workflow_executions SET status='FAILED', "
-                "error_message='서버 재시작으로 인한 강제 종료' "
-                "WHERE status='RUNNING'"
+
+        # 2) 좀비 실행 FAILED 처리 — RUNNING 뿐 아니라 PENDING 도 포함.
+        # 서버가 /run 응답 후 BackgroundTask 가 기동되기 직전에 죽으면
+        # PENDING 으로 영원히 남는다.
+        now = datetime.utcnow()
+        stale_result = await db.execute(
+            select(WorkflowExecution).where(
+                WorkflowExecution.status.in_(
+                    [ExecutionStatus.RUNNING, ExecutionStatus.PENDING]
+                )
             )
         )
+        stale = list(stale_result.scalars())
+        for ex in stale:
+            ex.status = ExecutionStatus.FAILED
+            ex.error_message = "서버 재시작으로 인한 강제 종료"
+            if ex.completed_at is None:
+                ex.completed_at = now
+
         await db.commit()
 
         q_count = r1.rowcount
-        e_count = r2.rowcount
+        e_count = len(stale)
         if q_count or e_count:
             print(f"[CLEANUP] 좀비 큐 {q_count}건 삭제, 좀비 실행 {e_count}건 FAILED 처리")
 
@@ -133,6 +163,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 통일 에러 포맷 핸들러 등록 (Phase 2b)
+# 모든 예외가 {"error": {"code","message","details"}} 형태로 직렬화된다.
+register_exception_handlers(app)
 
 # API 라우터 등록
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)

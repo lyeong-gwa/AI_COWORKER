@@ -7,8 +7,14 @@ DAG 기반 워크플로우 실행:
 3. 조건 분기 처리
 4. 병렬 실행 지원 (merge 노드까지 대기)
 5. 에러 핸들링
+
+Phase 4b 확장
+------------
+- 노드별 timeout (``asyncio.wait_for``) — 무한 블록 방지
+- Heartbeat task — 실행 동안 주기적으로 ``heartbeat`` 이벤트를 bus로 push
 """
 
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 from collections import defaultdict
@@ -27,8 +33,45 @@ from ..models.workflow import (
     ExecutionStatus,
 )
 from .tool_executor import render_template
+from .execution_bus import get_execution_bus
+from ..schemas.workflow import ExecutionLogEvent
 from ..nodes import NodeHandlerRegistry
 from ..nodes.base import ExecutionContext
+
+
+# ── Phase 4b: 노드 실행 timeout 정책 ────────────────────────────────────────
+# 단일 노드가 이 시간 이상 블록되면 ``NodeTimeoutError`` 로 실패 처리한다.
+# 외부 API·LLM 호출이 잠시 느릴 수는 있으나 5분 이상 묶여 있으면 운영상
+# 장애로 본다. 노드 타입별 override 는 ``_NODE_TIMEOUT_OVERRIDES`` 참조.
+NODE_DEFAULT_TIMEOUT_SECONDS: float = 300.0
+
+# 노드 타입별 timeout override. 지정되지 않은 타입은 기본값 사용.
+_NODE_TIMEOUT_OVERRIDES: Dict[str, float] = {
+    # AI 호출은 상대적으로 장시간 가능. 10분까지 허용.
+    NodeDefType.AI_CUSTOM.value: 600.0,
+    NodeDefType.AI_API_ROUTER.value: 600.0,
+    # 단순 API/지식 호출은 짧게 제한하여 사용자 체감 시간 개선.
+    NodeDefType.API_CALL.value: 60.0,
+    NodeDefType.KNOWLEDGE.value: 30.0,
+    # 나머지 로직/출력 노드는 기본값 그대로.
+}
+
+
+class NodeTimeoutError(Exception):
+    """단일 노드 실행이 ``_get_node_timeout`` 값을 초과하여 타임아웃된 경우."""
+
+    def __init__(self, node_id: str, def_type: str, seconds: float) -> None:
+        super().__init__(
+            f"Node '{node_id}' ({def_type}) timed out after {seconds}s"
+        )
+        self.node_id = node_id
+        self.def_type = def_type
+        self.seconds = seconds
+
+
+# Heartbeat emit 간격. 너무 짧으면 네트워크 부하, 너무 길면 끊김 감지 지연.
+# 프론트엔드가 연결 상태를 갱신하기에 충분한 30초로 고정.
+HEARTBEAT_INTERVAL_SECONDS: float = 30.0
 
 
 class WorkflowEngine:
@@ -53,6 +96,7 @@ class WorkflowEngine:
 
     async def run(self) -> None:
         """워크플로우 실행"""
+        heartbeat_task: Optional[asyncio.Task] = None
         async with async_session_maker() as db:
             try:
                 # 1. 실행 정보 로드
@@ -70,6 +114,9 @@ class WorkflowEngine:
                 self.execution.status = ExecutionStatus.RUNNING
                 self.execution.started_at = datetime.utcnow()
                 await db.commit()
+
+                # Phase 4b: heartbeat 태스크 기동 — 구독자 연결 유지·정상성 확인
+                heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
                 # 5. 초기 벨트 데이터 설정
                 trigger_data = self.execution.input_data or {}
@@ -90,6 +137,15 @@ class WorkflowEngine:
 
                 await db.commit()
 
+                # Phase 4a: 완료 이벤트 push (fire-and-forget, 엔진 흐름 무관)
+                await self._emit_event(
+                    "execution_complete",
+                    data={
+                        "status": ExecutionStatus.COMPLETED.value,
+                        "outputData": output_data,
+                    },
+                )
+
             except Exception as e:
                 # 에러 처리
                 self.execution.status = ExecutionStatus.FAILED
@@ -97,7 +153,27 @@ class WorkflowEngine:
                 self.execution.completed_at = datetime.utcnow()
                 self.execution.node_results = self.node_results
                 await db.commit()
+
+                # Phase 4a: 실패 완료 이벤트 push
+                await self._emit_event(
+                    "execution_complete",
+                    data={
+                        "status": ExecutionStatus.FAILED.value,
+                        "error": str(e),
+                        "errorNodeId": self.execution.error_node_id,
+                    },
+                )
                 raise
+            finally:
+                # Phase 4b: heartbeat 태스크 정리. execution_complete 를 push한 후
+                # 구독자가 끊어질 시간을 보장하기 위해 cancel 로 즉시 종료.
+                if heartbeat_task is not None and not heartbeat_task.done():
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except (asyncio.CancelledError, Exception):
+                        # heartbeat 내부 예외는 실행 결과에 영향 없음.
+                        pass
 
     async def _load_execution(self, db: AsyncSession) -> None:
         """실행 정보 로드"""
@@ -334,6 +410,16 @@ class WorkflowEngine:
         }
         self.node_results[node_id] = node_result
 
+        # Phase 4a: 노드 시작 이벤트 push
+        await self._emit_event(
+            "node_start",
+            node_id=node_id,
+            data={
+                "definitionType": node.definition_type,
+                "startTime": start_time.isoformat(),
+            },
+        )
+
         try:
             # 입력 데이터 수집 (이전 노드들의 벨트 데이터 병합)
             belt_input = self._collect_belt_input(node_id)
@@ -358,7 +444,8 @@ class WorkflowEngine:
             # 결과 저장
             node_result["status"] = "completed"
             node_result["outputData"] = output
-            node_result["endTime"] = datetime.utcnow().isoformat()
+            end_time_iso = datetime.utcnow().isoformat()
+            node_result["endTime"] = end_time_iso
 
             # 벨트에 저장: 자신의 출력 + 입력 데이터를 _passthrough로 보존
             if isinstance(output, dict):
@@ -370,11 +457,34 @@ class WorkflowEngine:
             if node.definition_type == NodeDefType.CONDITION and node.branches:
                 self._handle_condition_branches(node, output)
 
+            # Phase 4a: 노드 완료 이벤트 push
+            await self._emit_event(
+                "node_complete",
+                node_id=node_id,
+                data={
+                    "definitionType": node.definition_type,
+                    "output": output,
+                    "endTime": end_time_iso,
+                },
+            )
+
         except Exception as e:
             node_result["status"] = "failed"
             node_result["error"] = str(e)
-            node_result["endTime"] = datetime.utcnow().isoformat()
+            end_time_iso = datetime.utcnow().isoformat()
+            node_result["endTime"] = end_time_iso
             self.execution.error_node_id = node_id
+
+            # Phase 4a: 노드 오류 이벤트 push
+            await self._emit_event(
+                "node_error",
+                node_id=node_id,
+                data={
+                    "definitionType": node.definition_type,
+                    "error": str(e),
+                    "endTime": end_time_iso,
+                },
+            )
             raise
 
     def _collect_belt_input(self, node_id: str) -> Dict[str, Any]:
@@ -428,7 +538,7 @@ class WorkflowEngine:
         input_data: Dict[str, Any],
         db: AsyncSession,
     ) -> Any:
-        """노드 타입별 실행 — 핸들러 레지스트리에 위임"""
+        """노드 타입별 실행 — 핸들러 레지스트리에 위임 (Phase 4b: timeout 래핑)"""
         ctx = ExecutionContext(
             db=db,
             execution_id=self.execution_id,
@@ -437,7 +547,48 @@ class WorkflowEngine:
             render_template=render_template,
         )
         handler = NodeHandlerRegistry.get(node.definition_type)
-        return await handler.execute(node, input_data, ctx)
+        timeout = self._get_node_timeout(node.definition_type)
+        try:
+            return await asyncio.wait_for(
+                handler.execute(node, input_data, ctx),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise NodeTimeoutError(
+                node_id=node.id,
+                def_type=node.definition_type,
+                seconds=timeout,
+            ) from exc
+
+    def _get_node_timeout(self, def_type: str) -> float:
+        """노드 타입별 timeout(초) 반환.
+
+        타입별 override 가 없으면 ``NODE_DEFAULT_TIMEOUT_SECONDS`` (5분).
+        """
+        return _NODE_TIMEOUT_OVERRIDES.get(def_type, NODE_DEFAULT_TIMEOUT_SECONDS)
+
+    async def _heartbeat_loop(self) -> None:
+        """실행 중 주기적으로 ``heartbeat`` 이벤트를 bus 로 push.
+
+        ``asyncio.CancelledError`` 로 종료되며, 그 외 예외는 구독자 측에
+        영향을 주지 않도록 조용히 무시한다. 네트워크 단절·프록시 idle timeout
+        을 막고, 연결 상태 UI 갱신에 사용된다.
+        """
+        try:
+            while True:
+                await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+                await self._emit_event(
+                    "heartbeat",
+                    data={"timestamp": datetime.utcnow().isoformat()},
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "heartbeat_loop 예외 무시 execution_id=%s", self.execution_id,
+                exc_info=True,
+            )
 
     def _collect_outputs(self) -> Dict[str, Any]:
         """출력 노드 결과 수집"""
@@ -472,6 +623,35 @@ class WorkflowEngine:
         """조건 분기 처리 (특정 분기만 활성화)"""
         # TODO: 분기별 연결선 필터링 구현
         pass
+
+    async def _emit_event(
+        self,
+        event_type: str,
+        node_id: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """이벤트 버스로 실행 로그 이벤트를 push (fire-and-forget, 예외 격리).
+
+        Phase 4a: 엔진이 노드 상태 변화를 실시간 구독자에게 알리는 유일한 통로.
+        예외가 발생해도 실행 흐름을 절대 중단시키지 않도록 ``try/except`` 로 감싼다.
+        """
+        try:
+            bus = get_execution_bus()
+            event = ExecutionLogEvent(
+                eventType=event_type,
+                timestamp=datetime.utcnow(),
+                nodeId=node_id,
+                data=data or {},
+            )
+            # publish 자체는 non-blocking (put_nowait 기반) 이므로 await 해도 지연 없음.
+            await bus.publish(self.execution_id, event)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "execution_bus emit 실패 (execution_id=%s event=%s) — 실행은 계속 진행",
+                self.execution_id, event_type,
+                exc_info=True,
+            )
 
 
 async def execute_workflow(execution_id: str) -> None:

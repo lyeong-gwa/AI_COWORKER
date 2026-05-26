@@ -1,11 +1,13 @@
 """API 시작 노드 핸들러 — 외부 API 호출 후 응답을 출력으로 전달"""
-from typing import Any, Dict
+from typing import Any, Dict, List
+from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
 
 import httpx
 from sqlalchemy import select
 
 from ..registry import NodeHandlerRegistry
 from ..base import NodeHandler, ExecutionContext
+from ..common import render_url_or_header
 
 
 @NodeHandlerRegistry.register
@@ -35,6 +37,7 @@ class ApiStartHandler(NodeHandler):
         body_template = None
         auth_type = 'none'
         auth_config = {}
+        api_parameters: List[Dict[str, Any]] = []
 
         # 1. ApiDefinition DB에서 로드 (우선)
         if api_def_id:
@@ -50,6 +53,7 @@ class ApiStartHandler(NodeHandler):
                 body_template = api_def.body_template
                 auth_type = api_def.auth_type
                 auth_config = api_def.auth_config or {}
+                api_parameters = api_def.parameters or []
             else:
                 return {"error": f"API 정의를 찾을 수 없습니다: {api_def_id}", "status": 0, "data": None}
 
@@ -70,25 +74,45 @@ class ApiStartHandler(NodeHandler):
             return {"error": "API 문서가 선택되지 않았습니다", "status": 0, "data": None}
 
         # 파라미터로 템플릿 렌더링
-        url = ctx.render_template(url_template, params)
+        url = render_url_or_header(url_template, params, ctx.render_template)
+
+        # API 정의의 query 파라미터를 URL에 자동 추가
+        query_params = {}
+        for p in api_parameters:
+            if p.get('in') == 'query':
+                p_name = p.get('name', '')
+                if not p_name:
+                    continue
+                # 우선순위: params(사용자 입력/defaultParams) > 파라미터 기본값
+                if p_name in params and params[p_name]:
+                    query_params[p_name] = str(params[p_name])
+                elif p.get('default'):
+                    query_params[p_name] = str(p['default'])
+        if query_params:
+            parsed = urlparse(url)
+            existing_qs = parse_qs(parsed.query, keep_blank_values=True)
+            for k, v in query_params.items():
+                existing_qs[k] = [v]
+            new_qs = urlencode(existing_qs, doseq=True)
+            url = urlunparse(parsed._replace(query=new_qs))
 
         rendered_headers = {}
         if isinstance(headers_raw, dict):
             rendered_headers = {
-                k: ctx.render_template(str(v), params)
+                k: render_url_or_header(str(v), params, ctx.render_template)
                 for k, v in headers_raw.items()
             }
 
         # 인증 처리 (ApiDefinition에서 로드한 경우)
         if auth_type == 'bearer':
             token = auth_config.get('token', '')
-            rendered_token = ctx.render_template(token, params)
+            rendered_token = render_url_or_header(token, params, ctx.render_template)
             if rendered_token:
                 rendered_headers['Authorization'] = f"Bearer {rendered_token}"
         elif auth_type == 'api_key':
             key_name = auth_config.get('headerName', 'X-API-Key')
             key_value = auth_config.get('apiKey', '')
-            rendered_headers[key_name] = ctx.render_template(key_value, params)
+            rendered_headers[key_name] = render_url_or_header(key_value, params, ctx.render_template)
 
         # 빈 값 헤더 제거 (Bearer 뒤 토큰 없는 경우 등)
         rendered_headers = {
