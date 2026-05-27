@@ -392,6 +392,26 @@ export const instanceDbApi = {
   getRecord: (id: string, recordId: string): Promise<InstanceDBRecord> =>
     request(`/instance-dbs/${id}/records/${recordId}`),
 
+  /** record 단건 삭제 */
+  deleteRecord: (idbId: string, recordId: string): Promise<{ deleted: boolean; recordId: string }> =>
+    request(`/instance-dbs/${idbId}/records/${recordId}`, { method: 'DELETE' }),
+
+  /** records bulk 삭제 */
+  bulkDeleteRecords: (
+    idbId: string,
+    body: { recordIds?: string[]; filter?: Record<string, unknown> },
+  ): Promise<{ deletedCount: number; deletedIds: string[] }> =>
+    request(`/instance-dbs/${idbId}/records/delete`, { method: 'POST', body: JSON.stringify(body) }),
+
+  /** records 전체 비우기 (메타 보존). confirmDbId 가 idbId 와 일치해야 진행. */
+  clearInstanceDbRecords: (
+    idbId: string,
+  ): Promise<{ cleared: boolean; instanceDbId: string; deletedCount: number }> =>
+    request(`/instance-dbs/${idbId}/records/clear`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmDbId: idbId }),
+    }),
+
   /**
    * record 즉석 변환 다운로드 URL 빌더.
    * 실제 fetch 없이 URL 문자열만 반환한다 (다운로드 트리거용).
@@ -533,7 +553,7 @@ export const nodeApi = {
 // Workflow API
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Workflow } from '../types';
+import type { Workflow, WorkflowDeletePreview } from '../types';
 
 export interface CreateWorkflowData {
   name: string;
@@ -613,8 +633,12 @@ export const workflowApi = {
   update: (id: string, data: UpdateWorkflowData): Promise<Workflow> =>
     request(`/workflows/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
-  /** 워크플로우 삭제 */
-  delete: (id: string): Promise<void> =>
+  /** 워크플로우 삭제 preview — 함께 삭제될 데이터 카운트 조회 */
+  deletePreview: (id: string): Promise<WorkflowDeletePreview> =>
+    request(`/workflows/${id}/delete-preview`),
+
+  /** 워크플로우 삭제 (cascade). 200 + body 반환. */
+  delete: (id: string): Promise<{ deleted: boolean; workflowId: string; cascadeCounts: { instances: number; warehouseEntries: number; nodeResults: number } }> =>
     request(`/workflows/${id}`, { method: 'DELETE' }),
 
   /** 워크플로우 실행 (레거시 동기 경로) */

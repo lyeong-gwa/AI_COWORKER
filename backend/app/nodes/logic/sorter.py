@@ -77,21 +77,10 @@ class SorterHandler(NodeHandler):
                 if already_exists:
                     return {BeltKey.SORTER_HANDLE: "__skip__"}
 
-        # 창고에 축적
-        try:
-            entry = WarehouseEntry(
-                id=f"wh-{uuid.uuid4().hex[:8]}",
-                node_instance_id=node.id,
-                execution_id=ctx.execution_id,
-                data=original if isinstance(original, dict) else {"value": original},
-            )
-            ctx.db.add(entry)
-        except Exception:
-            pass
-
         # 규칙 순차 평가
         rules = config.get("rules", [])
         matched_handle = "default"
+        matched_rule_id: Optional[str] = None
         # (instanceDbId, frozen filter) → 매칭 record 존재 여부. 동일 sorter 실행 내 캐시.
         idb_cache: Dict[Tuple[str, Tuple[Tuple[str, Any], ...]], bool] = {}
 
@@ -110,7 +99,26 @@ class SorterHandler(NodeHandler):
 
             if hit:
                 matched_handle = f"rule-{rule.get('id', '')}"
+                matched_rule_id = rule.get("id") or None
                 break
+
+        # 창고에 축적 (분기 결정 후 — __sorterHandle 메타 포함)
+        try:
+            base = original if isinstance(original, dict) else {"value": original}
+            data_payload = {
+                **base,
+                "__sorterHandle": matched_handle,
+                "__matchedRuleId": matched_rule_id,
+            }
+            entry = WarehouseEntry(
+                id=f"wh-{uuid.uuid4().hex[:8]}",
+                node_instance_id=node.id,
+                execution_id=ctx.execution_id,
+                data=data_payload,
+            )
+            ctx.db.add(entry)
+        except Exception:
+            pass
 
         return {BeltKey.SORTER_HANDLE: matched_handle}
 

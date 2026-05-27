@@ -333,14 +333,82 @@ async def update_workflow(
     return workflow_to_camel(workflow)
 
 
+@router.get(
+    "/{workflow_id}/delete-preview",
+    summary="워크플로우 삭제 영향 미리보기",
+    description=(
+        "실제 삭제 전 cascade 로 함께 사라질 데이터의 카운트만 반환한다. "
+        "운영자가 web UI 의 confirm 모달에서 영향 범위를 확인할 때 사용한다."
+    ),
+)
+async def workflow_delete_preview(workflow_id: str, db: AsyncSession = Depends(get_db)):
+    """워크플로우 삭제 시 cascade 로 삭제될 항목 카운트 조회."""
+    from sqlalchemy import func
+
+    # workflow 존재 확인
+    wf_result = await db.execute(
+        select(Workflow).where(Workflow.id == workflow_id)
+    )
+    workflow = wf_result.scalar_one_or_none()
+    if not workflow:
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
+
+    # 실행 인스턴스 카운트
+    instance_count_q = select(func.count(WorkflowExecution.id)).where(
+        WorkflowExecution.workflow_id == workflow_id
+    )
+    instance_count = int((await db.execute(instance_count_q)).scalar() or 0)
+
+    # 노드별 결과 카운트 — node_results JSON 의 key 합산 (executions.node_results 안에 누적)
+    node_result_total = 0
+    if instance_count > 0:
+        nr_q = select(WorkflowExecution.node_results).where(
+            WorkflowExecution.workflow_id == workflow_id
+        )
+        for row in (await db.execute(nr_q)).scalars().all():
+            if isinstance(row, dict):
+                node_result_total += len(row)
+
+    # 워크플로우 소속 실행 인스턴스 id 들 → warehouse_entries 카운트
+    warehouse_count = 0
+    if instance_count > 0:
+        exec_ids_q = select(WorkflowExecution.id).where(
+            WorkflowExecution.workflow_id == workflow_id
+        )
+        exec_ids = [r for r in (await db.execute(exec_ids_q)).scalars().all()]
+        if exec_ids:
+            we_count_q = select(func.count(WarehouseEntry.id)).where(
+                WarehouseEntry.execution_id.in_(exec_ids)
+            )
+            warehouse_count = int((await db.execute(we_count_q)).scalar() or 0)
+
+    return {
+        "workflowId": workflow_id,
+        "workflowName": workflow.name,
+        "instanceCount": instance_count,
+        "warehouseEntryCount": warehouse_count,
+        "nodeResultCount": node_result_total,
+        "willCascadeDelete": True,
+    }
+
+
 @router.delete(
     "/{workflow_id}",
-    status_code=204,
-    summary="워크플로우 삭제",
-    description="워크플로우 및 관련 노드/연결선/실행 이력을 모두 삭제한다.",
+    summary="워크플로우 삭제 (cascade)",
+    description=(
+        "워크플로우와 관련 모든 데이터(노드·연결선·실행이력·창고 항목)를 "
+        "단일 트랜잭션으로 삭제한다. "
+        "`warehouse_entries` 는 FK 가 없으므로 명시 DELETE 로 정리한다. "
+        "응답에 cascade 카운트가 포함된다."
+    ),
 )
 async def delete_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
-    """워크플로우 삭제"""
+    """워크플로우 cascade 삭제 — workflow + nodes + connections + executions + warehouse_entries."""
+    from sqlalchemy import delete as sql_delete
+
     result = await db.execute(select(Workflow).where(Workflow.id == workflow_id))
     workflow = result.scalar_one_or_none()
 
@@ -350,8 +418,69 @@ async def delete_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
             details={"workflowId": workflow_id},
         )
 
-    await db.delete(workflow)
-    await db.commit()
+    # 워크플로우 소속 실행 인스턴스 id 들 (warehouse 삭제용)
+    exec_ids_q = select(WorkflowExecution.id).where(
+        WorkflowExecution.workflow_id == workflow_id
+    )
+    exec_ids = [r for r in (await db.execute(exec_ids_q)).scalars().all()]
+    instance_count = len(exec_ids)
+
+    # node_results 카운트 (응답용)
+    node_result_total = 0
+    if exec_ids:
+        nr_q = select(WorkflowExecution.node_results).where(
+            WorkflowExecution.workflow_id == workflow_id
+        )
+        for row in (await db.execute(nr_q)).scalars().all():
+            if isinstance(row, dict):
+                node_result_total += len(row)
+
+    # warehouse_entries 명시 삭제 (FK 부재로 ORM cascade 가 닿지 않음)
+    warehouse_deleted = 0
+    if exec_ids:
+        we_result = await db.execute(
+            sql_delete(WarehouseEntry)
+            .where(WarehouseEntry.execution_id.in_(exec_ids))
+            .returning(WarehouseEntry.id)
+        )
+        warehouse_deleted = len(we_result.all())
+
+    # 본체 삭제 — ORM cascade 로 nodes / connections / executions 가 함께 사라진다
+    try:
+        await db.delete(workflow)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    # 감사 로그 (best-effort, 트랜잭션 외부)
+    try:
+        await audit_log(
+            db,
+            "system",
+            "workflow.delete",
+            "workflow",
+            workflow_id,
+            {
+                "workflowId": workflow_id,
+                "name": workflow.name,
+                "instanceCount": instance_count,
+                "warehouseEntriesDeleted": warehouse_deleted,
+                "nodeResultCount": node_result_total,
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        "deleted": True,
+        "workflowId": workflow_id,
+        "cascadeCounts": {
+            "instances": instance_count,
+            "warehouseEntries": warehouse_deleted,
+            "nodeResults": node_result_total,
+        },
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

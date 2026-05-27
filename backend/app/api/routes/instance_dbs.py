@@ -34,6 +34,10 @@ from ...schemas.instance_db import (
     InstanceDBCreate,
     InstanceDBRecordResponse,
     InstanceDBUpdate,
+    RecordBulkDeleteRequest,
+    RecordBulkDeleteResponse,
+    RecordClearRequest,
+    RecordClearResponse,
     RecordListResponse,
 )
 from ...services.instance_db_store import (
@@ -346,6 +350,125 @@ async def export_record_endpoint(
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
+    )
+
+
+# ── records 삭제 ───────────────────────────────────────────────────────────
+
+
+@router.delete(
+    "/{instance_db_id}/records/{record_id}",
+    summary="record 단건 삭제",
+    description=(
+        "record 1건을 파일 시스템에서 제거한다. 메타와 다른 record 는 보존된다. "
+        "미존재 record 는 404."
+    ),
+)
+async def delete_record(
+    instance_db_id: str,
+    record_id: str,
+    store: InstanceDBStore = Depends(get_instance_db_store),
+):
+    try:
+        ok = await store.delete_record(instance_db_id, record_id)
+    except KeyError:
+        raise NotFoundError(
+            "인스턴스DB를 찾을 수 없습니다",
+            details={"instanceDbId": instance_db_id},
+        )
+    if not ok:
+        raise NotFoundError(
+            "record를 찾을 수 없습니다",
+            details={"instanceDbId": instance_db_id, "recordId": record_id},
+        )
+    return {"deleted": True, "recordId": record_id}
+
+
+@router.post(
+    "/{instance_db_id}/records/delete",
+    response_model=RecordBulkDeleteResponse,
+    summary="records 다중 삭제",
+    description=(
+        "``recordIds`` 와 ``filter`` 중 최소 하나는 지정해야 한다 "
+        "(둘 다 비어있으면 422). 둘 다 있으면 OR 합집합으로 매치된다. "
+        "``filter`` 는 ``record.data`` 의 key 가 모두 일치해야 매치 (AND)."
+    ),
+)
+async def bulk_delete_records(
+    instance_db_id: str,
+    body: RecordBulkDeleteRequest,
+    store: InstanceDBStore = Depends(get_instance_db_store),
+):
+    try:
+        deleted_ids = await store.bulk_delete_records(
+            instance_db_id,
+            record_ids=body.recordIds,
+            data_filter=body.filter,
+        )
+    except KeyError:
+        raise NotFoundError(
+            "인스턴스DB를 찾을 수 없습니다",
+            details={"instanceDbId": instance_db_id},
+        )
+    except ValueError as err:
+        # "recordIds and filter both empty" → 422
+        raise ValidationError(
+            "recordIds 와 filter 중 최소 하나는 지정해야 합니다",
+            details={"hint": str(err)},
+        )
+
+    return RecordBulkDeleteResponse(
+        deletedCount=len(deleted_ids),
+        deletedIds=deleted_ids,
+    )
+
+
+@router.post(
+    "/{instance_db_id}/records/clear",
+    response_model=RecordClearResponse,
+    summary="records 전체 비우기",
+    description=(
+        "해당 InstanceDB 의 모든 records 를 일괄 삭제한다. "
+        "인스턴스DB 메타(이름·설명·스키마)는 보존된다. "
+        "``confirmDbId`` 가 path 의 idb_id 와 정확히 일치해야만 진행 (실수 방지). "
+        "불일치 시 422 ``confirmDbId mismatch`` 반환."
+    ),
+)
+async def clear_records(
+    instance_db_id: str,
+    body: RecordClearRequest,
+    store: InstanceDBStore = Depends(get_instance_db_store),
+):
+    # 안전 가드: confirmDbId 가 path 와 일치해야만 진행
+    if body.confirmDbId != instance_db_id:
+        raise ValidationError(
+            "confirmDbId mismatch",
+            details={
+                "confirmDbId": body.confirmDbId,
+                "instanceDbId": instance_db_id,
+            },
+        )
+
+    # 메타 존재 확인
+    meta = await store.get_meta(instance_db_id)
+    if meta is None:
+        raise NotFoundError(
+            "인스턴스DB를 찾을 수 없습니다",
+            details={"instanceDbId": instance_db_id},
+        )
+
+    try:
+        deleted_count = await store.clear_all_records(instance_db_id)
+    except KeyError:
+        raise NotFoundError(
+            "인스턴스DB를 찾을 수 없습니다",
+            details={"instanceDbId": instance_db_id},
+        )
+
+    return RecordClearResponse(
+        cleared=True,
+        instanceDbId=instance_db_id,
+        deletedCount=deleted_count,
     )
 
 

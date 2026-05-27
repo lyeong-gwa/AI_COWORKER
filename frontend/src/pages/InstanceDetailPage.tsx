@@ -401,6 +401,12 @@ function WarehouseEntriesPanel({
     nodeName: string;
     defType: string | undefined;
     items: WarehouseInstanceEntry[];
+    sorterHandleGroups?: Array<{
+      handle: string;
+      label: string;
+      items: WarehouseInstanceEntry[];
+      color: string;
+    }>;
   }>>(() => {
     const groupMap = new Map<string, WarehouseInstanceEntry[]>();
     for (const e of entries) {
@@ -408,12 +414,45 @@ function WarehouseEntriesPanel({
       g.push(e);
       groupMap.set(e.nodeInstanceId, g);
     }
-    return Array.from(groupMap.entries()).map(([nodeInstanceId, items]) => ({
-      nodeInstanceId,
-      nodeName: nodeNameMap[nodeInstanceId] ?? nodeInstanceId,
-      defType: nodeDefTypeMap[nodeInstanceId],
-      items,
-    }));
+    return Array.from(groupMap.entries()).map(([nodeInstanceId, items]) => {
+      const defType = nodeDefTypeMap[nodeInstanceId];
+      const result: any = {
+        nodeInstanceId,
+        nodeName: nodeNameMap[nodeInstanceId] ?? nodeInstanceId,
+        defType,
+        items,
+      };
+
+      // If this is a sorter node, subdivide by __sorterHandle
+      if (defType === 'sorter') {
+        const handleGroups = new Map<string, WarehouseInstanceEntry[]>();
+        for (const item of items) {
+          const handle = (item.data as Record<string, unknown>)?.__sorterHandle as string | undefined || 'legacy';
+          const group = handleGroups.get(handle) ?? [];
+          group.push(item);
+          handleGroups.set(handle, group);
+        }
+
+        // Sort handles: put 'default' last, others alphabetically
+        const sortedHandles = Array.from(handleGroups.entries()).sort(([a], [b]) => {
+          if (a === 'default') return 1;
+          if (b === 'default') return -1;
+          return a.localeCompare(b);
+        });
+
+        result.sorterHandleGroups = sortedHandles.map(([handle, groupItems]) => {
+          const isDefault = handle === 'default';
+          return {
+            handle,
+            label: isDefault ? '차단' : '통과',
+            items: groupItems,
+            color: isDefault ? 'slate' : 'cyan',
+          };
+        });
+      }
+
+      return result;
+    });
   }, [entries, nodeNameMap, nodeDefTypeMap]);
 
   const refreshEntries = useCallback(async () => {
@@ -518,45 +557,117 @@ function WarehouseEntriesPanel({
                 {/* Entry rows — hidden when collapsed */}
                 {!isCollapsed && (
                   <div className={`${style.itemBg} border-t border-slate-800/40`}>
-                    {group.items.map((e) => {
-                      const isSelected = selectedEntryId === e.id;
-                      const time = e.createdAt
-                        ? new Date(e.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                        : '-';
-                      return (
-                        <div
-                          key={e.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => onSelectEntry(e.id)}
-                          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onSelectEntry(e.id); } }}
-                          className={`flex items-center gap-2 pl-8 pr-3 py-2 cursor-pointer transition-colors border-l-2 ${
-                            isSelected
-                              ? 'bg-cyan-900/40 border-l-cyan-500'
-                              : `${style.itemBorder} hover:bg-slate-800/50`
-                          }`}
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className={`text-xs truncate ${isSelected ? 'text-cyan-100 font-medium' : 'text-slate-300'}`}>
-                              {getEntryTitle(e)}
+                    {/* Sorter handle grouping (if applicable) */}
+                    {group.sorterHandleGroups ? (
+                      <>
+                        {group.sorterHandleGroups.map((handleGroup) => {
+                          const isDefaultHandle = handleGroup.handle === 'default';
+                          const headerBgClass = isDefaultHandle ? 'bg-slate-800/30' : 'bg-cyan-900/20';
+                          const labelColorClass = isDefaultHandle ? 'text-slate-400' : 'text-cyan-300';
+
+                          return (
+                            <div key={handleGroup.handle}>
+                              {/* Sub-header for handle group — always show */}
+                              <div className={`px-3 py-2 text-[10px] font-mono uppercase tracking-wider ${headerBgClass} border-t border-slate-700/40`}>
+                                <span className={labelColorClass}>
+                                  {handleGroup.handle}
+                                </span>
+                                <span className={`ml-2 font-semibold ${labelColorClass}`}>
+                                  {handleGroup.items.length}건
+                                </span>
+                                <span className={`ml-2 text-[9px] ${isDefaultHandle ? 'text-slate-500' : 'text-cyan-400/60'}`}>
+                                  ({handleGroup.label})
+                                </span>
+                              </div>
+
+                              {/* Entries in this handle group */}
+                              {handleGroup.items.map((e) => {
+                                const isSelected = selectedEntryId === e.id;
+                                const time = e.createdAt
+                                  ? new Date(e.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                                  : '-';
+                                return (
+                                  <div
+                                    key={e.id}
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => onSelectEntry(e.id)}
+                                    onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onSelectEntry(e.id); } }}
+                                    className={`flex items-center gap-2 pl-8 pr-3 py-2 cursor-pointer transition-colors border-l-2 ${
+                                      isSelected
+                                        ? 'bg-cyan-900/40 border-l-cyan-500'
+                                        : `${style.itemBorder} hover:bg-slate-800/50`
+                                    }`}
+                                  >
+                                    <div className="flex-1 min-w-0">
+                                      <div className={`text-xs truncate ${isSelected ? 'text-cyan-100 font-medium' : 'text-slate-300'}`}>
+                                        {getEntryTitle(e)}
+                                      </div>
+                                      <div className="text-[10px] font-mono text-slate-500">{time}</div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={(ev) => {
+                                        ev.stopPropagation();
+                                        handleDeleteEntry(e.nodeInstanceId, e.id);
+                                      }}
+                                      className="flex-shrink-0 p-1 rounded text-slate-600 hover:text-rose-400 hover:bg-rose-950/30 transition-colors"
+                                      title="이 항목 삭제"
+                                      aria-label="항목 삭제"
+                                    >
+                                      🗑
+                                    </button>
+                                  </div>
+                                );
+                              })}
                             </div>
-                            <div className="text-[10px] font-mono text-slate-500">{time}</div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              handleDeleteEntry(e.nodeInstanceId, e.id);
-                            }}
-                            className="flex-shrink-0 p-1 rounded text-slate-600 hover:text-rose-400 hover:bg-rose-950/30 transition-colors"
-                            title="이 항목 삭제"
-                            aria-label="항목 삭제"
-                          >
-                            🗑
-                          </button>
-                        </div>
-                      );
-                    })}
+                          );
+                        })}
+                      </>
+                    ) : (
+                      /* Regular (non-sorter) entry display */
+                      <>
+                        {group.items.map((e) => {
+                          const isSelected = selectedEntryId === e.id;
+                          const time = e.createdAt
+                            ? new Date(e.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                            : '-';
+                          return (
+                            <div
+                              key={e.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => onSelectEntry(e.id)}
+                              onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onSelectEntry(e.id); } }}
+                              className={`flex items-center gap-2 pl-8 pr-3 py-2 cursor-pointer transition-colors border-l-2 ${
+                                isSelected
+                                  ? 'bg-cyan-900/40 border-l-cyan-500'
+                                  : `${style.itemBorder} hover:bg-slate-800/50`
+                              }`}
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className={`text-xs truncate ${isSelected ? 'text-cyan-100 font-medium' : 'text-slate-300'}`}>
+                                  {getEntryTitle(e)}
+                                </div>
+                                <div className="text-[10px] font-mono text-slate-500">{time}</div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  handleDeleteEntry(e.nodeInstanceId, e.id);
+                                }}
+                                className="flex-shrink-0 p-1 rounded text-slate-600 hover:text-rose-400 hover:bg-rose-950/30 transition-colors"
+                                title="이 항목 삭제"
+                                aria-label="항목 삭제"
+                              >
+                                🗑
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
                   </div>
                 )}
               </div>

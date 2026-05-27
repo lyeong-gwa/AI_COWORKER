@@ -319,6 +319,109 @@ class InstanceDBStore:
             raise KeyError(db_id)
         return self._read_json(self._record_path(db_id, rec_id))
 
+    async def delete_record(self, db_id: str, rec_id: str) -> bool:
+        """record 1건 삭제. 메타 부재 → ``KeyError``. record 부재 → ``False`` 반환.
+
+        파일 unlink 만 수행하며 메타 자체는 보존된다.
+        """
+        async with self._lock:
+            if not self._meta_path(db_id).exists():
+                raise KeyError(db_id)
+            rec_path = self._record_path(db_id, rec_id)
+            if not rec_path.exists():
+                return False
+            try:
+                rec_path.unlink()
+            except FileNotFoundError:
+                return False
+            return True
+
+    async def bulk_delete_records(
+        self,
+        db_id: str,
+        *,
+        record_ids: Optional[List[str]] = None,
+        data_filter: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        """record 다건 삭제. 두 조건의 OR 합집합으로 매치된 record 들을 삭제한다.
+
+        - ``record_ids``: 직접 지정된 record id 리스트. 존재하는 것만 삭제.
+        - ``data_filter``: ``record.data`` 의 (key,value) 가 모두 일치해야 매치.
+          (None 또는 빈 dict 이면 비활성)
+
+        메타 부재 → ``KeyError``. 두 조건 모두 비었으면 ``ValueError`` (호출부에서 422 변환).
+        반환: 실제로 삭제된 record id 리스트.
+        """
+        # 안전 가드: 두 조건 모두 비었으면 거부 — 전체 wipe 사고 방지
+        has_ids = bool(record_ids)
+        has_filter = isinstance(data_filter, dict) and len(data_filter) > 0
+        if not has_ids and not has_filter:
+            raise ValueError("recordIds and filter both empty")
+
+        async with self._lock:
+            if not self._meta_path(db_id).exists():
+                raise KeyError(db_id)
+
+            # 매치 대상 후보 수집
+            to_delete: set[str] = set()
+
+            # 1) recordIds 경로 — 존재 검사만 수행
+            if has_ids:
+                for rid in record_ids or []:
+                    if self._record_path(db_id, rid).exists():
+                        to_delete.add(rid)
+
+            # 2) data_filter 경로 — 모든 record 를 로드해 매치 검사
+            if has_filter:
+                for rec in self._load_all_records(db_id):
+                    rid = rec.get("id")
+                    if not rid or rid in to_delete:
+                        continue
+                    data = rec.get("data") or {}
+                    if not isinstance(data, dict):
+                        continue
+                    matched = all(
+                        data.get(k) == v for k, v in (data_filter or {}).items()
+                    )
+                    if matched:
+                        to_delete.add(rid)
+
+            # 실제 삭제
+            deleted: List[str] = []
+            for rid in to_delete:
+                rec_path = self._record_path(db_id, rid)
+                try:
+                    rec_path.unlink()
+                    deleted.append(rid)
+                except FileNotFoundError:
+                    # 동시 삭제 가정 — 무시
+                    continue
+            return deleted
+
+    async def clear_all_records(self, db_id: str) -> int:
+        """해당 IDB 의 모든 records 를 삭제한다. 메타(meta.json)는 보존된다.
+
+        메타 부재 → ``KeyError``.
+        반환: 실제로 삭제된 record 수.
+        """
+        async with self._lock:
+            if not self._meta_path(db_id).exists():
+                raise KeyError(db_id)
+
+            db_dir = self._db_dir(db_id)
+            deleted = 0
+            for child in list(db_dir.iterdir()):
+                if not child.is_file():
+                    continue
+                if not _REC_NAME_RE.match(child.name):
+                    continue
+                try:
+                    child.unlink()
+                    deleted += 1
+                except FileNotFoundError:
+                    pass
+            return deleted
+
     # ── 내부 스캐너 ──────────────────────────────────────────────────────
 
     def _iter_meta_sync(self) -> List[Dict[str, Any]]:

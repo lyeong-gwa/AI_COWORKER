@@ -5,14 +5,16 @@
  * 각 행 클릭 시 WorkflowViewerPage (/workflows/:id) 로 이동.
  *
  * Phase 3b 신설. 편집 기능 없음 (읽기전용 + 실행 진입점).
+ * Phase B: 카드 우상단 🗑 버튼 → WorkflowDeleteConfirmModal.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { workflowApi, type WorkflowSummary } from '../services/api';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { EmptyState } from '../components/common/EmptyState';
 import { CliHint } from '../components/common/CliHint';
 import { useToast } from '../components/common/Toast';
+import { WorkflowDeleteConfirmModal } from '../components/workflow/WorkflowDeleteConfirmModal';
 
 type SortKey = 'updatedDesc' | 'updatedAsc' | 'nameAsc';
 
@@ -47,24 +49,24 @@ export default function WorkflowListPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | WorkflowSummary['status']>('all');
   const [sortKey, setSortKey] = useState<SortKey>('updatedDesc');
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      try {
-        const data = await workflowApi.list();
-        if (!cancelled) setWorkflows(data);
-      } catch (e) {
-        toast.error(`목록 조회 실패: ${e instanceof Error ? e.message : String(e)}`);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+  // 삭제 모달 상태
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await workflowApi.list();
+      setWorkflows(data);
+    } catch (e) {
+      toast.error(`목록 조회 실패: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLoading(false);
     }
-    load();
-    return () => {
-      cancelled = true;
-    };
   }, [toast]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -104,7 +106,8 @@ export default function WorkflowListPage() {
 
         <div className="mb-4">
           <CliHint tone="subtle">
-            업무자동화의 생성·수정·삭제는 CLI로만 가능합니다. 목록 조회와 실행은 웹 UI에서 수행할 수 있습니다.
+            생성·수정은 CLI로 가능합니다.{' '}
+            <strong className="text-slate-200">삭제·실행·조회는 웹 UI에서 수행할 수 있습니다.</strong>
           </CliHint>
         </div>
 
@@ -185,60 +188,94 @@ export default function WorkflowListPage() {
         ) : (
           <div className="space-y-2">
             {filtered.map((wf) => (
-              <Link
+              <div
                 key={wf.id}
-                to={`/workflows/${wf.id}`}
-                className="group block rounded-lg border border-slate-800 bg-slate-900/40 hover:bg-slate-900/80 hover:border-slate-700 transition-all"
+                className="group relative rounded-lg border border-slate-800 bg-slate-900/40 hover:bg-slate-900/80 hover:border-slate-700 transition-all"
               >
-                <div className="flex items-center gap-4 px-5 py-4">
-                  {/* Left status */}
-                  <div className="flex-shrink-0">
-                    <StatusBadge status={wf.status} variant="workflow" size="xs" />
-                  </div>
+                <Link
+                  to={`/workflows/${wf.id}`}
+                  className="block"
+                >
+                  <div className="flex items-center gap-4 px-5 py-4 pr-14">
+                    {/* Left status */}
+                    <div className="flex-shrink-0">
+                      <StatusBadge status={wf.status} variant="workflow" size="xs" />
+                    </div>
 
-                  {/* Middle: info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-baseline gap-3 min-w-0">
-                      <h3 className="text-slate-100 font-semibold text-[15px] truncate">
-                        {wf.name}
-                      </h3>
-                      <span className="text-[10px] font-mono text-slate-600 truncate hidden md:inline">
-                        {wf.id}
+                    {/* Middle: info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline gap-3 min-w-0">
+                        <h3 className="text-slate-100 font-semibold text-[15px] truncate">
+                          {wf.name}
+                        </h3>
+                        <span className="text-[10px] font-mono text-slate-600 truncate hidden md:inline">
+                          {wf.id}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5 truncate">
+                        {wf.description || '설명 없음'}
+                      </p>
+                      {wf.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {wf.tags.slice(0, 4).map((tag) => (
+                            <span
+                              key={tag}
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-400 border border-slate-700/60"
+                            >
+                              #{tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right: meta */}
+                    <div className="flex-shrink-0 flex items-center gap-4 text-right">
+                      <div className="text-[11px] font-mono text-slate-500">
+                        <div>노드 {wf.nodeCount}</div>
+                        <div className="text-slate-600 mt-0.5">{formatDate(wf.updatedAt)}</div>
+                      </div>
+                      <span className="text-slate-600 group-hover:text-sky-400 transition-colors text-lg">
+                        →
                       </span>
                     </div>
-                    <p className="text-xs text-slate-500 mt-0.5 truncate">
-                      {wf.description || '설명 없음'}
-                    </p>
-                    {wf.tags.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {wf.tags.slice(0, 4).map((tag) => (
-                          <span
-                            key={tag}
-                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-400 border border-slate-700/60"
-                          >
-                            #{tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
                   </div>
+                </Link>
 
-                  {/* Right: meta */}
-                  <div className="flex-shrink-0 flex items-center gap-4 text-right">
-                    <div className="text-[11px] font-mono text-slate-500">
-                      <div>노드 {wf.nodeCount}</div>
-                      <div className="text-slate-600 mt-0.5">{formatDate(wf.updatedAt)}</div>
-                    </div>
-                    <span className="text-slate-600 group-hover:text-sky-400 transition-colors text-lg">
-                      →
-                    </span>
-                  </div>
-                </div>
-              </Link>
+                {/* 삭제 버튼 — hover 시에만 노출 */}
+                <button
+                  type="button"
+                  title={`"${wf.name}" 삭제`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDeleteTarget({ id: wf.id, name: wf.name });
+                  }}
+                  className="absolute top-1/2 right-4 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/30 transition-colors"
+                  aria-label={`"${wf.name}" 삭제`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M1 3.5h12M4.5 3.5V2a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v1.5M5.5 6v5M8.5 6v5M2.5 3.5l.5 9a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 .5-.5l.5-9" />
+  </svg>
+                </button>
+              </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* 워크플로 삭제 확인 모달 */}
+      {deleteTarget && (
+        <WorkflowDeleteConfirmModal
+          workflowId={deleteTarget.id}
+          workflowName={deleteTarget.name}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={() => {
+            setDeleteTarget(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }

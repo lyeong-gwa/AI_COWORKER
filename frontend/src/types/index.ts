@@ -642,3 +642,14 @@ export interface InstanceDBRecordListResponse {
   limit: number;
   offset: number;
 }
+
+// ─── Workflow Delete Preview ──────────────────────────────────────────────────
+
+export interface WorkflowDeletePreview {
+  workflowId: string;
+  workflowName: string;
+  instanceCount: number;
+  warehouseEntryCount: number;
+  nodeResultCount: number;
+  willCascadeDelete: boolean;
+}

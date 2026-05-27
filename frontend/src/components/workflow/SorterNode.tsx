@@ -153,13 +153,64 @@ function SorterNodeInner({ data, selected, id }: { data: SorterNodeData; selecte
           </div>
         )}
 
-        {/* Item count */}
-        <div className="flex items-center gap-1.5 pt-1 border-t border-white/10">
-          <div className={`w-2 h-2 rounded-full ${itemCount > 0 ? 'bg-violet-400' : 'bg-gray-500'}`} />
-          <span className="text-violet-300/60 text-[10px]">
-            {itemCount > 0 ? `${itemCount}건 처리 이력` : '처리 대기 중'}
-          </span>
-        </div>
+        {/* Item count — sorter handle breakdown when execution output is available */}
+        {(() => {
+          // Parse __sorterHandle breakdown from execution output
+          const outputArr = Array.isArray(execOutput) ? execOutput as Array<Record<string, unknown>> : null;
+          const hasSorterHandles = outputArr && outputArr.length > 0 && '__sorterHandle' in outputArr[0];
+
+          if (hasSorterHandles && outputArr) {
+            // Group by __sorterHandle
+            const counts: Record<string, number> = {};
+            for (const item of outputArr) {
+              const handle = typeof item.__sorterHandle === 'string' ? item.__sorterHandle : 'default';
+              counts[handle] = (counts[handle] ?? 0) + 1;
+            }
+            const total = outputArr.length;
+            const handleEntries = Object.entries(counts).sort(([a], [b]) => {
+              // Put 'default' last
+              if (a === 'default') return 1;
+              if (b === 'default') return -1;
+              return a.localeCompare(b);
+            });
+
+            return (
+              <div className="pt-1 border-t border-white/10 space-y-1">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-violet-400" />
+                  <span className="text-violet-300/60 text-[10px]">입력 {total}건</span>
+                </div>
+                {handleEntries.map(([handle, count]) => {
+                  const isDefault = handle === 'default';
+                  return (
+                    <div key={handle} className="flex items-center gap-1.5 pl-3">
+                      <span className="text-violet-300/40 text-[9px]">↳</span>
+                      <span className={`text-[9px] font-mono ${isDefault ? 'text-slate-400' : 'text-cyan-300'}`}>
+                        {handle}:
+                      </span>
+                      <span className={`text-[9px] font-semibold ${isDefault ? 'text-slate-400' : 'text-cyan-200'}`}>
+                        {count}건
+                      </span>
+                      <span className={`text-[8px] ${isDefault ? 'text-slate-500' : 'text-cyan-400/60'}`}>
+                        {isDefault ? '차단' : '통과'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          }
+
+          // Fallback: original display
+          return (
+            <div className="flex items-center gap-1.5 pt-1 border-t border-white/10">
+              <div className={`w-2 h-2 rounded-full ${itemCount > 0 ? 'bg-violet-400' : 'bg-gray-500'}`} />
+              <span className="text-violet-300/60 text-[10px]">
+                {itemCount > 0 ? `${itemCount}건 처리 이력` : '처리 대기 중'}
+              </span>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Execution output pill */}

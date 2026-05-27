@@ -14,6 +14,7 @@ import { CliHint } from '../components/common/CliHint';
 import { EmptyState } from '../components/common/EmptyState';
 import { useToast } from '../components/common/Toast';
 import { StyledMarkdown } from '../components/common/StyledMarkdown';
+import { RecordsClearConfirmModal } from '../components/instance-db/RecordsClearConfirmModal';
 
 const RECORDS_LIMIT = 20;
 
@@ -125,10 +126,12 @@ function RecordCard({
   record,
   dbId,
   viewerHints,
+  onDelete,
 }: {
   record: InstanceDBRecord;
   dbId: string;
   viewerHints: Record<string, string>;
+  onDelete?: (recordId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -177,6 +180,19 @@ function RecordCard({
         <span className="ml-auto text-[10px] font-mono text-slate-600 flex-shrink-0">
           {new Date(record.createdAt).toLocaleString('ko-KR')}
         </span>
+        {onDelete && (
+          <button
+            type="button"
+            title="이 레코드 삭제"
+            onClick={() => onDelete(record.id)}
+            className="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+            aria-label="레코드 삭제"
+          >
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1 3.5h12M4.5 3.5V2a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v1.5M5.5 6v5M8.5 6v5M2.5 3.5l.5 9a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 .5-.5l.5-9" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Body */}
@@ -259,6 +275,9 @@ export function InstanceDBViewerPage() {
   const [recordsOffset, setRecordsOffset] = useState(0);
   const [recordsLoading, setRecordsLoading] = useState(false);
 
+  // Clear modal state
+  const [showClearModal, setShowClearModal] = useState(false);
+
   // Load InstanceDB list
   useEffect(() => {
     let cancelled = false;
@@ -339,6 +358,49 @@ export function InstanceDBViewerPage() {
     }
   }
 
+  // ─── Record 단건 삭제 ─────────────────────────────────────────────────────
+  async function handleDeleteRecord(recordId: string) {
+    if (!selectedId) return;
+    const confirmed = window.confirm(
+      `record ${recordId} 를 삭제합니다. 되돌릴 수 없습니다.`,
+    );
+    if (!confirmed) return;
+    try {
+      await instanceDbApi.deleteRecord(selectedId, recordId);
+      toast.success(`레코드 삭제됨`);
+      // 목록 재조회: 현재 offset 에서 처음부터 refetch
+      const res: InstanceDBRecordListResponse = await instanceDbApi.listRecords(selectedId, {
+        limit: RECORDS_LIMIT,
+        offset: 0,
+      });
+      setRecords(res.items ?? []);
+      setRecordsTotal(res.total ?? 0);
+      setRecordsOffset(0);
+    } catch (e) {
+      toast.error(`레코드 삭제 실패: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // ─── Records 전체 비우기 ──────────────────────────────────────────────────
+  async function handleClearRecords() {
+    if (!selectedId) return;
+    try {
+      const res = await instanceDbApi.clearInstanceDbRecords(selectedId);
+      toast.success(`${res.deletedCount}건 삭제됨 — records 전체 비워졌습니다`);
+      setShowClearModal(false);
+      // refetch
+      const listRes: InstanceDBRecordListResponse = await instanceDbApi.listRecords(selectedId, {
+        limit: RECORDS_LIMIT,
+        offset: 0,
+      });
+      setRecords(listRes.items ?? []);
+      setRecordsTotal(listRes.total ?? 0);
+      setRecordsOffset(0);
+    } catch (e) {
+      toast.error(`전체 비우기 실패: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return dbs;
@@ -364,7 +426,8 @@ export function InstanceDBViewerPage() {
           </div>
           <h1 className="text-2xl font-light text-slate-50 tracking-tight mb-3">인스턴스DB</h1>
           <CliHint tone="subtle">
-            인스턴스DB의 생성·수정·삭제는 CLI로만 가능합니다. 웹 UI에서는 조회만 지원합니다.
+            인스턴스DB <strong className="text-slate-200">메타</strong>의 생성·수정은 CLI 전용입니다.{' '}
+            <strong className="text-slate-200">records 삭제는 웹 UI 에서도 가능합니다.</strong>
           </CliHint>
         </div>
       </div>
@@ -465,7 +528,7 @@ export function InstanceDBViewerPage() {
 
               {/* Records section */}
               <section>
-                <div className="flex items-baseline gap-3 mb-3">
+                <div className="flex items-center gap-3 mb-3">
                   <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-slate-500">
                     Records
                   </h3>
@@ -474,6 +537,15 @@ export function InstanceDBViewerPage() {
                       ? '로딩 중…'
                       : `${records.length} / ${recordsTotal}`}
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowClearModal(true)}
+                    title="records 전체 비우기 (메타 보존)"
+                    className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-red-800/50 text-[11px] font-mono text-red-400/80 hover:text-red-300 hover:border-red-700 hover:bg-red-950/40 transition-colors"
+                  >
+                    <span>🧹</span>
+                    <span>전체 비우기</span>
+                  </button>
                 </div>
 
                 {recordsLoading && records.length === 0 ? (
@@ -491,7 +563,13 @@ export function InstanceDBViewerPage() {
                 ) : (
                   <div className="space-y-3">
                     {records.map((rec) => (
-                      <RecordCard key={rec.id} record={rec} dbId={selected!.id} viewerHints={selected?.viewerHints ?? {}} />
+                      <RecordCard
+                        key={rec.id}
+                        record={rec}
+                        dbId={selected!.id}
+                        viewerHints={selected?.viewerHints ?? {}}
+                        onDelete={handleDeleteRecord}
+                      />
                     ))}
 
                     {hasMoreRecords && (
@@ -517,6 +595,17 @@ export function InstanceDBViewerPage() {
           ) : null}
         </main>
       </div>
+
+      {/* Records 전체 비우기 확인 모달 */}
+      {showClearModal && selected && (
+        <RecordsClearConfirmModal
+          idbId={selected.id}
+          idbName={selected.name}
+          recordCount={recordsTotal}
+          onConfirm={handleClearRecords}
+          onCancel={() => setShowClearModal(false)}
+        />
+      )}
     </div>
   );
 }
