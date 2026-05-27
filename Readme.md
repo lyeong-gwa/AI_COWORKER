@@ -1,7 +1,37 @@
 # AI 업무도우미
 
 > ITO 담당자의 반복 업무를 **AI 워크플로우**로 자동화해 주는 사내 도우미 플랫폼입니다.
-> 본 문서는 **중간 보고용 시스템 소개서**로, 화면을 따라가며 "이 시스템이 무엇을 하는 도구인지"를 한눈에 보여주는 데 목적이 있습니다.
+> 본 문서는 **시스템 소개 + 셋업 가이드** 두 파트로 구성되어 있습니다.
+> 셋업만 필요하시면 곧장 [§11. 셋업 가이드](#11-셋업-가이드-git-clone--running) 로.
+
+---
+
+## 🚀 Quick Start (Python·Node 깔린 PC, 5분)
+
+```bash
+# 1. clone
+git clone https://github.com/lyeong-gwa/AI_COWORKER.git
+cd AI_COWORKER
+
+# 2. 백엔드
+cd backend
+python -m venv .venv
+. .venv/Scripts/activate                  # PowerShell: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cp .env.example .env                      # LLM_PROVIDER, OPENAI_API_KEY 등 채움
+python scripts/wipe.py --confirm          # DB·ChromaDB 제로 스타트
+python -m uvicorn app.main:app --port 8002 --host 0.0.0.0 &
+
+# 3. 프론트엔드 (다른 터미널)
+cd ../frontend
+npm install
+npm run dev -- --port 5174 --strictPort
+
+# 4. 접속
+# http://localhost:5174
+```
+
+> 자세한 설명·트러블슈팅·폐쇄망 운영은 [§11. 셋업 가이드](#11-셋업-가이드-git-clone--running) 참고.
 
 ---
 
@@ -178,3 +208,257 @@ AI가 답변할 때 참고하는 **사내 지식 베이스**입니다. 좌측에
 | 9 | 노드 카탈로그 | [09-node-catalog.png](docs/images/09-node-catalog.png) |
 | 10 | 인스턴스DB | [10-instance-dbs.png](docs/images/10-instance-dbs.png) |
 | 11 | 실행 폼 | [11-run-form.png](docs/images/11-run-form.png) |
+
+---
+
+## 11. 셋업 가이드 (git clone → running)
+
+본 절은 **Python·Node 가 깔린 깨끗한 PC** 에서 본 시스템을 처음부터 띄우는 절차입니다.
+
+### 11-1. 사전 요구
+
+| 도구 | 버전 | 비고 |
+|---|---|---|
+| Python | **3.11+** | venv 권장 |
+| Node.js | **18+** | npm 동봉 |
+| 디스크 | 약 **1.5 GB** | Python 의존 + node_modules + ChromaDB + ONNX 임베딩 모델 |
+| OS | Windows / Linux / macOS | PowerShell·bash 둘 다 명령 제공 |
+| (선택) Chrome | 최신 | E2E 테스트·Playwright MCP 사용 시 |
+
+### 11-2. git clone
+
+```bash
+git clone https://github.com/lyeong-gwa/AI_COWORKER.git
+cd AI_COWORKER
+```
+
+### 11-3. 백엔드 셋업
+
+```bash
+cd backend
+
+# 1) 가상환경
+python -m venv .venv
+
+# 2) 활성화
+#   - Windows PowerShell
+.venv\Scripts\Activate.ps1
+#   - Windows cmd
+.venv\Scripts\activate.bat
+#   - bash / git-bash / Linux / macOS
+source .venv/bin/activate
+
+# 3) 의존 설치
+pip install -r requirements.txt
+
+# 4) 환경변수
+cp .env.example .env       # 또는 직접 작성 (아래 §11-5 참고)
+
+# 5) DB·ChromaDB 제로 스타트
+python scripts/wipe.py --confirm
+```
+
+### 11-4. 프론트엔드 셋업
+
+```bash
+cd ../frontend
+npm install               # node_modules ~250MB
+```
+
+### 11-5. 환경변수 (`backend/.env`)
+
+```env
+# ─ LLM provider 선택 ────────────────────────────────────────
+LLM_PROVIDER=openai                         # openai | anthropic | azure | custom_api
+OPENAI_API_KEY=sk-...                       # openai 선택 시 필수
+ANTHROPIC_API_KEY=                          # anthropic 선택 시 필수
+AZURE_OPENAI_ENDPOINT=                      # azure 선택 시 필수
+AZURE_OPENAI_API_KEY=
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
+AZURE_OPENAI_API_VERSION=2024-02-15-preview
+CUSTOM_API_KEY=                             # 사내 LLM Gateway 등
+CUSTOM_API_MODEL=default
+CUSTOM_API_TIMEOUT=60
+
+# ─ 로컬 ONNX 임베딩 (LLM 독립, 폐쇄망 OK) ──────────────────
+ONNX_MODEL_PATH=./models/onnx/jhgan_ko-sroberta-multitask
+
+# ─ Karpathy 위키 운영 파라미터 ─────────────────────────────
+KNOWLEDGE_COLLECTION_NAME=knowledge_v2
+KNOWLEDGE_IMPLICIT_THRESHOLD=0.75           # 그래프 자동 의미 엣지 임계
+KNOWLEDGE_IMPLICIT_MAX_PER_PAGE=5
+```
+
+### 11-6. 서비스 기동
+
+각각 별도 터미널:
+
+```bash
+# 백엔드 (8002 고정 포트)
+cd backend
+python -m uvicorn app.main:app --port 8002 --host 0.0.0.0
+
+# 프론트엔드 (5174 고정 포트)
+cd frontend
+npm run dev -- --port 5174 --strictPort
+```
+
+접속:
+- 웹 UI: http://localhost:5174
+- OpenAPI: http://localhost:8002/docs
+- 헬스체크: http://localhost:8002/health
+
+### 11-7. 첫 사용 시나리오 (제로 스타트 → 1 워크플로 실행)
+
+```bash
+# 1. 지식 등록 (선택)
+#  - 옵션 A: 웹 UI /knowledge 에서 + 신규
+#  - 옵션 B: archive 폴더에 .md 일괄 → 변환
+mkdir backend/data/knowledge-archive/내폴더
+cp 어디/*.md backend/data/knowledge-archive/내폴더/
+curl -X POST http://localhost:8002/api/v1/knowledge/restore-from-archive \
+  -H "Content-Type: application/json" \
+  -d '{"archive_subpath":"내폴더","dry_run":false,"llm_enabled":true}'
+
+# 2. API 명세 등록 (CLI)
+curl -X POST http://localhost:8002/api/v1/api-definitions \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-api","method":"GET","urlTemplate":"https://...","parameters":[...]}'
+
+# 3. 워크플로 조립 (CLI — 13종 노드 카탈로그 활용)
+curl http://localhost:8002/api/v1/nodes/catalog        # 사용 가능 노드 확인
+curl -X POST http://localhost:8002/api/v1/workflows -d '{"nodes":[...], "connections":[...]}'
+
+# 4. 실행
+curl -X POST http://localhost:8002/api/v1/workflows/{wf-id}/run
+#   → 응답: { "instanceId": "exec-...", "status": "queued" }
+
+# 5. 결과 확인
+curl http://localhost:8002/api/v1/warehouse/instances/exec-...
+# 또는 웹 UI 에서 실행 카드 ▶ 클릭 → 진행상황·결과 추적
+```
+
+### 11-8. 인접 시스템 (선택 — 워크플로에서 호출)
+
+| 시스템 | 포트 | 역할 | git repo |
+|---|---|---|---|
+| **목업 API 서버** | 8001 | 사내 Jira/Confluence/메신저/메일 모사 + 문의글 fixture | 별도 폴더 (현재 git 미초기화) |
+| **코드정적분석** | 8000 / 5173 | LLM 기반 정적분석 결과 제공 | 별도 repo |
+
+본 시스템 단독 운영 가능. 위 두 시스템은 워크플로의 `api-call`·`api-start` 노드가 호출할 때만 필요.
+
+### 11-9. 폐쇄망 운영 노트
+
+| 컴포넌트 | 폐쇄망 호환 |
+|---|---|
+| ChromaDB (벡터 저장) | ✅ 로컬 |
+| ONNX 임베딩 (`jhgan_ko-sroberta-multitask`) | ✅ 로컬 (모델 파일 사전 배치) |
+| SQLite | ✅ 로컬 |
+| **LLM 호출** | ⚠️ OpenAI/Anthropic API 직접 호출 불가 → **CLI 핸들러 필요** (계획 단계) |
+| 지식 검색·그래프·brief | ✅ LLM 없이 동작 (임베딩만 사용) |
+| Lint 동적 검사·archive restore·enrich | ⚠️ LLM 필요 (CLI 핸들러 추가 후 가능) |
+
+폐쇄망 이식 절차:
+1. 사외망 PC 에서 ONNX 모델 + ChromaDB 만들기 → `backend/models/onnx/`, `backend/data/chroma/` 폴더 통째 복사
+2. requirements.txt 의존을 사내 PyPI 미러로 받거나 wheels 미리 챙김
+3. `.env` 의 `LLM_PROVIDER=custom_api` + 사내 LLM Gateway URL/Key 또는 추후 `LLM_PROVIDER=cli`
+
+### 11-10. 테스트·빌드 검증
+
+```bash
+# 백엔드 회귀
+cd backend && python -m pytest -q          # 242 케이스 통과 기준
+
+# 프론트엔드 빌드
+cd ../frontend && npm run build            # exit 0, 약 3초
+```
+
+### 11-11. 디렉토리 구조
+
+```
+AI 업무도우미/
+├── backend/
+│   ├── app/
+│   │   ├── api/routes/          # FastAPI 라우터 (workflows, knowledge, api_definitions, ...)
+│   │   ├── nodes/               # 13종 범용 노드 핸들러
+│   │   │   └── catalog.py       # 노드 카탈로그 SSoT
+│   │   ├── services/            # 비즈니스 로직
+│   │   │   ├── workflow_engine.py
+│   │   │   ├── knowledge_*.py   # Karpathy v2 위키
+│   │   │   └── embedding/       # ONNX + ChromaDB
+│   │   └── main.py
+│   ├── data/                    # 런타임 (gitignore)
+│   │   ├── app.db               # SQLite
+│   │   ├── chroma/              # 벡터 DB
+│   │   ├── knowledge/           # 위키 페이지 (콘텐츠 ignore, _schema.yaml 만 commit)
+│   │   │   └── _schema.yaml     # 카테고리/서비스 enum
+│   │   ├── knowledge-raw/       # 원본 파일 보관
+│   │   └── knowledge-archive/   # 일괄 이관 대기소
+│   ├── models/                  # ONNX 모델 (gitignore, 사전 배치 필요)
+│   ├── scripts/
+│   │   ├── wipe.py              # DB·ChromaDB 초기화
+│   │   ├── e2e_zero_start.py
+│   │   ├── enrich_wiki_links.py # 위키 교차참조 LLM 자동 삽입
+│   │   └── migrate_to_multi_service.py
+│   ├── tests/                   # 242 케이스
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   │   ├── pages/               # KnowledgeViewerPage, KnowledgeGraphPage, ...
+│   │   ├── components/
+│   │   │   ├── knowledge/       # 옵시디언 스타일 UI 컴포넌트
+│   │   │   └── workflow/        # 인스턴스 뷰어
+│   │   └── services/api.ts
+│   └── package.json
+├── docs/                        # 시스템 가이드 (.md), 화면 이미지
+├── .omc/plans/                  # 설계 결정 근거 문서
+└── Readme.md (본 파일)
+```
+
+### 11-12. 트러블슈팅
+
+| 증상 | 원인 / 해결 |
+|---|---|
+| `Address already in use :8002` | `netstat -ano \| findstr :8002` → PID 확인 → `taskkill /F /PID xxx` |
+| ChromaDB 응답 이상 | `python scripts/wipe.py --confirm` 후 백엔드 재기동 |
+| `MODEL_NOT_FOUND: onnx` | `.env` 의 `ONNX_MODEL_PATH` 가 실제 경로인지. 첫 임베딩 호출 시 자동 다운로드 (인터넷 필요) |
+| `KEY_NOT_FOUND OPENAI_API_KEY` | `.env` 에 `OPENAI_API_KEY=sk-...` 채움 + 백엔드 재기동 |
+| npm install 실패 | Node 18+ 인지 확인. `node_modules/` 삭제 후 `npm install` 재시도 |
+| 지식 페이지가 빈 화면 | `GET /api/v1/knowledge` 응답 확인. ChromaDB 컬렉션 명 일치 확인 (`KNOWLEDGE_COLLECTION_NAME`) |
+| backend `--reload` 시 좀비 프로세스 | 운영 환경에선 `--reload` 사용 금지 |
+| 워크플로 실행이 큐에만 머무름 | 백엔드 로그 확인. LLM 키 / 외부 API 호출 실패 가능성 |
+
+### 11-13. 신규 워크플로 만들 때 흐름 (CLI 주도)
+
+```
+사용자: "○○ 업무 자동화하고 싶다"
+   ↓
+CLI (Claude Code · OpenCode 등):
+   1. 필요한 재료 식별 (지식 / API 명세 / 노드)
+   2. POST /api-definitions  로 외부 API 등록
+   3. POST /knowledge        로 지식 등록 (또는 archive 변환)
+   4. POST /nodes            로 커스텀 AI 노드 등록 (필요 시)
+   5. POST /workflows        로 워크플로 조립 (13 범용 노드)
+   ↓
+사용자: 웹 UI 에서 ▶ 실행
+   ↓
+백엔드: 비동기 실행 + 인스턴스 기록 + 결과 창고 적재
+   ↓
+사용자: 결과 확인 → 좋으면 from-instance 로 지식 프로모션 (compounding)
+```
+
+13 범용 노드:
+- starter: `form-start` `api-start`
+- ai: `ai-custom` `ai-api-router`
+- logic: `sorter` `unpacker` `mapper`
+- action: `api-call` `knowledge` `instance-db-insert` `instance-db-lookup`
+- output: `result` `markdown-viewer`
+
+도메인 특화 노드 신설 금지 — 모든 요구는 위 13종 조합으로 충족.
+
+---
+
+## 라이선스 · 문의
+
+- 라이선스: 사내 비공개
+- 문의: 시스템 관리자 / repo 이슈 트래커
