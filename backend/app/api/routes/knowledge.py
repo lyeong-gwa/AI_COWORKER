@@ -678,18 +678,20 @@ async def restore_from_archive_endpoint(
         )
 
 
-# ── /knowledge/graph (Karpathy v2 P3 §6.1 — 링크 그래프) ──────────────────
+# ── /knowledge/graph (재구성 Phase 1 — 임베딩 기반 의미 엣지 + community) ──
 
 
 @router.get(
     "/graph",
-    summary="지식 페이지 링크 그래프",
+    summary="지식 페이지 그래프 (explicit + implicit + community)",
     description=(
-        "Karpathy v2 P3 — 페이지(node)와 ``[[link]]`` 엣지를 모은 그래프 JSON. "
-        "선택 필터: ``category`` (단일), ``page_type`` (단일), "
-        "``service`` (단일, multi-service v3 P2). "
-        "엣지 ``isBroken=true`` 는 target 페이지가 존재하지 않을 때. "
-        "엣지 ``crossService=true`` (P2) 는 from/to 의 service 가 서로 다를 때."
+        "**그래프 재구성 Phase 1** (`.omc/plans/지식-그래프-재구성.md`) — "
+        "explicit `[[link]]` 엣지 위에 ChromaDB ``knowledge_v2`` 임베딩 기반 "
+        "implicit cosine 엣지를 추가하고, Louvain community + degree-centrality "
+        "godScore 를 계산하여 반환한다. LLM 호출 0 (폐쇄환경 호환). "
+        "선택 필터: ``category`` (단일), ``page_type`` (단일), ``service`` (단일). "
+        "튜닝 env: ``KNOWLEDGE_IMPLICIT_THRESHOLD`` (default 0.75), "
+        "``KNOWLEDGE_IMPLICIT_MAX_PER_PAGE`` (default 5)."
     ),
 )
 async def get_knowledge_graph(
@@ -710,65 +712,238 @@ async def get_knowledge_graph(
         except SchemaValidationError as exc:
             _raise_schema_violation(exc)
 
-    all_docs = list_md_files()
+    # builder 위임 — 모든 그래프 로직은 knowledge_graph_builder 가 단일 진실원.
+    from ...services.knowledge_graph_builder import build_graph as _build
 
-    # 필터 적용 — 본 필터는 node 와 그 node 의 outgoing edge 만 출력에 포함.
-    def _keep(d: KnowledgeFileDoc) -> bool:
-        if category and d.category != category:
-            return False
-        if page_type and d.page_type != page_type:
-            return False
-        if service and (d.service or "unknown") != service:
-            return False
-        return True
+    return _build(
+        service=service,
+        page_type=page_type,
+        category=category,
+    )
 
-    kept_docs = [d for d in all_docs if _keep(d)]
-    all_ids = {d.id for d in all_docs}
-    # P2 §2.4 — edges 의 crossService 판정용 service 룩업 (전체 페이지 기준)
-    service_by_id: Dict[str, str] = {d.id: (d.service or "unknown") for d in all_docs}
 
-    # backlink count 계산 — 필터 무관하게 _전체_ 에서 카운트
-    # (필터가 걸려도 backlink 수치는 페이지의 실제 인-디그리를 보여야 정확).
-    backlink_counts: Dict[str, int] = {d.id: 0 for d in all_docs}
-    for d in all_docs:
-        for raw_target in (d.links or []):
-            if raw_target in backlink_counts and raw_target != d.id:
-                backlink_counts[raw_target] += 1
+# ── /knowledge/edge (EdgeInspector 데이터 페어 — Phase 1 §3.3) ────────────
 
-    nodes: List[Dict[str, Any]] = []
-    edges: List[Dict[str, Any]] = []
-    for d in sorted(kept_docs, key=lambda x: x.id):
-        nodes.append({
-            "id": d.id,
-            "title": d.title,
-            "pageType": d.page_type,
-            "category": d.category,
-            "service": d.service or "unknown",  # NEW P2 §2.4
-            "linksCount": len(d.links or []),
-            "backlinksCount": backlink_counts.get(d.id, 0),
-        })
 
-    # 엣지 — 필터된 node 의 outgoing 만, 단 target 은 filter 무관 (broken 도 포함)
-    raw_edges: List[Dict[str, Any]] = []
-    for d in kept_docs:
-        from_service = d.service or "unknown"
-        for raw_target in (d.links or []):
-            # `[[deleted:...]]` 마커는 정상 링크 아님 — 그러나 v2 link parser 가 raw 그대로
-            # 캡처하므로 여기서 broken 으로 표현.
-            target = raw_target
-            is_broken = target not in all_ids
-            # P2 §2.4 — to 가 존재하면 service 비교, 없으면 (broken) crossService=false
-            to_service = service_by_id.get(target)
-            cross_service = (to_service is not None) and (to_service != from_service)
-            raw_edges.append({
-                "from": d.id,
-                "to": target,
-                "isBroken": is_broken,
-                "crossService": bool(cross_service),
-            })
+@router.get(
+    "/edge",
+    summary="두 페이지 사이 엣지 + 양쪽 페이지 전체 본문 (EdgeInspector 용)",
+    description=(
+        "**그래프 재구성 Phase 1 §3.3** — `from`, `to` 페이지의 KnowledgeDoc 전체와 "
+        "두 페이지를 잇는 엣지 메타 (kind/weight/similarity/isBroken/crossService) "
+        "를 한 응답에 묶어 반환. 엣지가 없으면 ``edge=null`` + 200. 한 쪽이라도 "
+        "페이지가 없으면 404."
+    ),
+)
+async def get_knowledge_edge(
+    from_: str = Query(..., alias="from", description="시작 페이지 id"),
+    to: str = Query(..., description="대상 페이지 id"),
+):
+    from_id = from_
+    if not from_id or not to:
+        raise ValidationError(
+            "'from' 과 'to' 모두 필수입니다",
+            details={"from": from_id, "to": to},
+        )
+    if from_id == to:
+        raise ValidationError(
+            "'from' 과 'to' 가 동일합니다 — 자기루프는 엣지가 아닙니다",
+            details={"from": from_id, "to": to},
+        )
 
-    edges = sorted(raw_edges, key=lambda e: (e["from"], e["to"]))
-    return {"nodes": nodes, "edges": edges}
+    chroma_hashes = _get_chroma_hashes()
+    from_doc = read_md_file(from_id, chroma_hashes)
+    to_doc = read_md_file(to, chroma_hashes)
+    if from_doc is None or to_doc is None:
+        missing = [pid for pid, d in [(from_id, from_doc), (to, to_doc)] if d is None]
+        raise NotFoundError(
+            "페이지를 찾을 수 없습니다",
+            details={"missing": missing},
+        )
+
+    # 1) explicit 검사 — from 본문에 [[to]] 가 있으면 explicit 엣지.
+    is_explicit_from_to = has_link_to(from_doc.content, to)
+    is_explicit_to_from = has_link_to(to_doc.content, from_id)
+
+    edge_obj: Optional[Dict[str, Any]] = None
+    from_service = from_doc.service or "unknown"
+    to_service = to_doc.service or "unknown"
+    cross_service = from_service != to_service
+
+    if is_explicit_from_to or is_explicit_to_from:
+        edge_obj = {
+            "kind": "explicit",
+            "weight": 1.0,
+            "similarity": None,
+            "isBroken": False,
+            "crossService": bool(cross_service),
+            # 추가 정보 — 어느 방향이 explicit 인지
+            "fromToExplicit": bool(is_explicit_from_to),
+            "toFromExplicit": bool(is_explicit_to_from),
+        }
+    else:
+        # 2) implicit 후보 — ChromaDB 임베딩으로 cosine 계산.
+        try:
+            from ...services.knowledge_graph_builder import _load_page_embeddings
+            import numpy as _np
+
+            embs = _load_page_embeddings([from_id, to])
+            v1 = embs.get(from_id)
+            v2 = embs.get(to)
+            if v1 is not None and v2 is not None:
+                sim = float(_np.dot(v1, v2))  # 둘 다 L2 normalize 됨
+                threshold = float(
+                    os.getenv("KNOWLEDGE_IMPLICIT_THRESHOLD", "0.75") or 0.75
+                )
+                if sim >= threshold:
+                    edge_obj = {
+                        "kind": "implicit",
+                        "weight": float(sim),
+                        "similarity": float(sim),
+                        "isBroken": False,
+                        "crossService": bool(cross_service),
+                    }
+                else:
+                    # threshold 미달 — 엣지는 없지만 similarity 는 알려준다 (디버깅 용).
+                    edge_obj = None
+            else:
+                edge_obj = None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[KNOWLEDGE_EDGE] cosine 계산 실패: %s", e)
+            edge_obj = None
+
+    return {
+        "from": _doc_to_response(from_doc),
+        "to": _doc_to_response(to_doc),
+        "edge": edge_obj,
+    }
+
+
+# ── /knowledge/edge/promote (implicit → explicit 승격 — Phase 1 §3.4) ──
+
+
+class EdgePromoteRequest(BaseModel):
+    """POST /knowledge/edge/promote 요청 body."""
+
+    model_config = {"populate_by_name": True}
+
+    from_: str = Field(..., alias="from", description="시작 페이지 id (수정 대상)")
+    to: str = Field(..., description="대상 페이지 id (링크 대상)")
+    anchorText: Optional[str] = Field(
+        default=None,
+        description="링크 prefix 텍스트 (예: '참고'). 비우면 '참고' 사용.",
+    )
+
+
+@router.post(
+    "/edge/promote",
+    summary="implicit 엣지 → explicit 링크 승격 (페이지 본문 자동 편집)",
+    description=(
+        "**그래프 재구성 Phase 1 §3.4** — `from` 페이지 본문 끝에 `[[to]]` 를 "
+        "포함한 새 문단을 추가하고 (anchorText prefix 적용), 내부 PUT 흐름과 "
+        "동일하게 version+1, changelog, _log/_index 갱신, ChromaDB sync 를 수행한다. "
+        "이미 `[[to]]` 가 포함되어 있으면 409."
+    ),
+)
+async def promote_edge_to_explicit(
+    request: EdgePromoteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    from_id = request.from_
+    to_id = request.to
+    if not from_id or not to_id:
+        raise ValidationError(
+            "'from' 과 'to' 모두 필수입니다",
+            details={"from": from_id, "to": to_id},
+        )
+    if from_id == to_id:
+        raise ValidationError(
+            "'from' 과 'to' 가 동일합니다",
+            details={"from": from_id, "to": to_id},
+        )
+
+    from_doc = read_md_file(from_id)
+    to_doc = read_md_file(to_id)
+    if from_doc is None or to_doc is None:
+        missing = [pid for pid, d in [(from_id, from_doc), (to_id, to_doc)] if d is None]
+        raise NotFoundError(
+            "페이지를 찾을 수 없습니다",
+            details={"missing": missing},
+        )
+
+    # 이미 explicit 이면 409
+    if has_link_to(from_doc.content, to_id):
+        raise ConflictError(
+            "이미 explicit 링크가 존재합니다 (이 페이지는 이미 [[to]] 를 가리킵니다)",
+            details={"from": from_id, "to": to_id},
+        )
+
+    anchor = (request.anchorText or "참고").strip() or "참고"
+
+    # 본문 끝에 새 문단 추가 — 마지막 줄 공백 정규화.
+    base = from_doc.content.rstrip()
+    new_paragraph = f"\n\n{anchor}: [[{to_id}]]\n"
+    new_content = base + new_paragraph
+
+    # links 재파싱, version+1
+    new_links = parse_links(new_content)
+    new_version = (from_doc.version or 1) + 1
+
+    # 파일 저장 (rename 없음, 동일 id 유지)
+    updated_doc = write_md_file(
+        doc_id=from_id,
+        title=from_doc.title,
+        content=new_content,
+        category=from_doc.category or "",
+        tags=from_doc.tags,
+        source=from_doc.source or "",
+        created=from_doc.created,
+        extra_metadata=from_doc.extra_metadata if from_doc.extra_metadata else None,
+        page_type=from_doc.page_type,
+        version=new_version,
+        links=new_links,
+        raw_source_id=from_doc.raw_source_id,
+        service=from_doc.service or "unknown",
+    )
+
+    operator = "edge-promote"
+
+    # changelog
+    try:
+        await add_changelog(
+            db,
+            knowledge_id=from_id,
+            version=new_version,
+            change_type="update",
+            operator=operator,
+            diff_summary=f"edge promote: implicit→explicit [[{to_id}]] (v{from_doc.version}→v{new_version})",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[KNOWLEDGE_EDGE_PROMOTE] changelog 적재 실패: %s", e)
+
+    # _log + _index
+    try:
+        append_log_entry(
+            operator=operator,
+            change_type="update",
+            doc_id=from_id,
+            version=new_version,
+        )
+        if from_doc.category:
+            rebuild_index(from_doc.category)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[KNOWLEDGE_EDGE_PROMOTE] log/index 갱신 실패: %s", e)
+
+    # ChromaDB sync — 본문이 바뀌었으므로 재임베딩.
+    _sync_doc_to_chroma(updated_doc)
+
+    return {
+        "from": from_id,
+        "to": to_id,
+        "newVersion": int(new_version),
+        "linkAdded": True,
+        "anchorText": anchor,
+    }
 
 
 # ── 상세 조회 ─────────────────────────────────────────────────────────────

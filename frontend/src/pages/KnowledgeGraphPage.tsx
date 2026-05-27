@@ -1,39 +1,47 @@
 /**
  * KnowledgeGraphPage (`/knowledge/graph`)
  *
- * Karpathy v2 — 지식 위키 링크 그래프 시각화.
- * 라이브러리: 순수 SVG (의존 추가 없이 N < 200 그래프에 충분)
- * force-directed 레이아웃: 단순 Fruchterman–Reingold 반복 시뮬레이션
- *
- * Phase 3: 서비스별 노드 색상 + cross-service edge 보라 점선 + 서비스 필터
- *
- * 기능:
- *   - 서비스 드롭다운 필터 (신규)
- *   - 카테고리 드롭다운, page_type 체크박스 5종 필터
- *   - 노드 색상 = service 별 (ServiceBadge 와 동일 매핑)
- *   - 노드 크기 ∝ backlinks_count
- *   - broken edge = 빨간 점선
- *   - cross-service edge = 보라 점선 (crossService === true)
- *   - 노드 클릭 → /knowledge/{id} 상세 이동
- *   - 빈 그래프 friendly empty state
+ * Phase 2:
+ *   - 노드 색상 = community 기준 (6색 팔레트 결정적 매핑)
+ *   - 노드 테두리 = service 기준
+ *   - 노드 크기 = godScore × 8 + 4
+ *   - 엣지 시각 차별화: explicit 실선 cyan / implicit 점선 회색 / crossService 보라 / broken 빨강
+ *   - 엣지 클릭 → EdgeInspectorPanel 우측 드로어
+ *   - 범례: 엣지 종류 + Community 목록 + Top God Nodes
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { knowledgeApi } from '../services/api';
-import type { KnowledgeGraphNode, KnowledgeGraphEdge, KnowledgeService, PageType } from '../types';
+import type { KnowledgeGraphNode, KnowledgeGraphEdge, KnowledgeService, PageType, KnowledgeCommunity } from '../types';
 import { getServiceColor } from '../components/knowledge/ServiceBadge';
+import { EdgeInspectorPanel } from '../components/knowledge/EdgeInspectorPanel';
 
-// ─── page_type 필터용 색상 (범례 표시용, 노드 색상은 service 기준) ──────────
+// ─── page_type 필터용 색상 ─────────────────────────────────────────────────────
 
 const PAGE_TYPE_COLOR: Record<PageType | string, string> = {
-  Summary: '#3b82f6',    // blue-500
-  Entity: '#10b981',     // emerald-500
-  Concept: '#8b5cf6',    // violet-500
-  Comparison: '#f59e0b', // amber-500
-  Synthesis: '#f43f5e',  // rose-500
+  Summary: '#3b82f6',
+  Entity: '#10b981',
+  Concept: '#8b5cf6',
+  Comparison: '#f59e0b',
+  Synthesis: '#f43f5e',
 };
 
 const PAGE_TYPES: PageType[] = ['Summary', 'Entity', 'Concept', 'Comparison', 'Synthesis'];
+
+// ─── Community 색상 팔레트 (6색, community.id 기준 결정적 매핑) ─────────────────
+
+const COMMUNITY_PALETTE = [
+  '#0ea5e9', // sky-500
+  '#10b981', // emerald-500
+  '#f59e0b', // amber-500
+  '#f43f5e', // rose-500
+  '#8b5cf6', // violet-500
+  '#f97316', // orange-500
+];
+
+function getCommunityColor(communityId: number): string {
+  return COMMUNITY_PALETTE[((communityId % COMMUNITY_PALETTE.length) + COMMUNITY_PALETTE.length) % COMMUNITY_PALETTE.length];
+}
 
 // ─── Force layout 타입 ───────────────────────────────────────────────────────
 
@@ -58,18 +66,18 @@ function buildLayout(
   const ITERATIONS = 80;
   const K = Math.sqrt((width * height) / Math.max(nodes.length, 1));
 
-  // 초기 위치: 원 위에 배치
   const layout: LayoutNode[] = nodes.map((node, i) => {
     const angle = (2 * Math.PI * i) / nodes.length;
     const r = Math.min(width, height) * 0.35;
-    const backlinks = node.backlinks_count ?? 0;
+    // 노드 크기: godScore × 8 + 4 (4px ~ 12px)
+    const godScore = node.godScore ?? 0;
     return {
       id: node.id,
       x: width / 2 + r * Math.cos(angle),
       y: height / 2 + r * Math.sin(angle),
       vx: 0,
       vy: 0,
-      radius: 8 + Math.min(backlinks * 2, 16),
+      radius: Math.max(4, Math.min(12, godScore * 8 + 4)),
       node,
     };
   });
@@ -80,7 +88,6 @@ function buildLayout(
     const cooling = 1 - iter / ITERATIONS;
     const temp = K * cooling * 0.5;
 
-    // 반발력 (모든 노드 쌍)
     for (let i = 0; i < layout.length; i++) {
       for (let j = i + 1; j < layout.length; j++) {
         const a = layout[i];
@@ -98,7 +105,6 @@ function buildLayout(
       }
     }
 
-    // 인력 (엣지)
     for (const edge of edges) {
       const a = indexById.get(edge.from);
       const b = indexById.get(edge.to);
@@ -115,7 +121,6 @@ function buildLayout(
       b.vy -= fy;
     }
 
-    // 위치 업데이트 + 경계 clamp
     const padding = 40;
     for (const n of layout) {
       const speed = Math.sqrt(n.vx * n.vx + n.vy * n.vy) || 1;
@@ -131,6 +136,21 @@ function buildLayout(
   return layout;
 }
 
+// ─── 엣지 클릭 히트박스 계산 (선분에서 점까지 거리) ─────────────────────────
+
+function distPointToSegment(
+  px: number, py: number,
+  x1: number, y1: number,
+  x2: number, y2: number,
+): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
 
 export function KnowledgeGraphPage() {
@@ -140,9 +160,11 @@ export function KnowledgeGraphPage() {
 
   const [allNodes, setAllNodes] = useState<KnowledgeGraphNode[]>([]);
   const [allEdges, setAllEdges] = useState<KnowledgeGraphEdge[]>([]);
+  const [communities, setCommunities] = useState<KnowledgeCommunity[]>([]);
   const [services, setServices] = useState<KnowledgeService[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [graphKey, setGraphKey] = useState(0); // refetch 트리거
 
   // 필터 상태
   const [availableCategories, setAvailableCategories] = useState<string[]>([]);
@@ -157,6 +179,9 @@ export function KnowledgeGraphPage() {
   const [layout, setLayout] = useState<LayoutNode[]>([]);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
 
+  // EdgeInspector 상태
+  const [activeEdge, setActiveEdge] = useState<{ from: string; to: string } | null>(null);
+
   // 데이터 로드
   useEffect(() => {
     const load = async () => {
@@ -170,6 +195,7 @@ export function KnowledgeGraphPage() {
         ]);
         setAllNodes(graphData.nodes);
         setAllEdges(graphData.edges);
+        setCommunities(graphData.communities ?? []);
         setAvailableCategories(metaData.categories);
         setServices(svcData);
       } catch (e) {
@@ -179,7 +205,7 @@ export function KnowledgeGraphPage() {
       }
     };
     load();
-  }, []);
+  }, [graphKey]);
 
   // SVG 크기 관찰
   useEffect(() => {
@@ -220,7 +246,7 @@ export function KnowledgeGraphPage() {
     setSelectedPageTypes((prev) => {
       const next = new Set(prev);
       if (next.has(pt)) {
-        if (next.size <= 1) return prev; // 최소 1개 유지
+        if (next.size <= 1) return prev;
         next.delete(pt);
       } else {
         next.add(pt);
@@ -236,18 +262,52 @@ export function KnowledgeGraphPage() {
     [navigate],
   );
 
-  // 현재 필터 기반 엣지 (broken/crossService 포함)
+  // SVG 클릭 — 엣지 히트 테스트
+  const handleSvgClick = useCallback(
+    (e: React.MouseEvent<SVGSVGElement>) => {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+
+      const HIT_TOLERANCE = 6;
+
+      for (const edge of visibleEdgesRef.current) {
+        const src = layoutMapRef.current.get(edge.from);
+        const tgt = layoutMapRef.current.get(edge.to);
+        if (!src || !tgt) continue;
+        const dx = tgt.x - src.x;
+        const dy = tgt.y - src.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const x2 = tgt.x - (dx / dist) * (tgt.radius + 6);
+        const y2 = tgt.y - (dy / dist) * (tgt.radius + 6);
+        if (distPointToSegment(px, py, src.x, src.y, x2, y2) < HIT_TOLERANCE) {
+          setActiveEdge({ from: edge.from, to: edge.to });
+          return;
+        }
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  // ref로 최신 값을 핸들러에서 접근
+  const visibleEdgesRef = useRef<KnowledgeGraphEdge[]>([]);
+  const layoutMapRef = useRef<Map<string, LayoutNode>>(new Map());
+
   const visibleNodeIds = new Set(layout.map((n) => n.id));
   const visibleEdges = allEdges.filter(
     (e) => visibleNodeIds.has(e.from) && visibleNodeIds.has(e.to),
   );
   const layoutMap = new Map(layout.map((n) => [n.id, n]));
+  visibleEdgesRef.current = visibleEdges;
+  layoutMapRef.current = layoutMap;
 
-  // 범례: 현재 보이는 노드의 서비스 목록
-  const visibleServices = Array.from(
-    new Set(layout.map((ln) => ln.node.service ?? 'unknown')),
-  );
-  const hasCrossService = visibleEdges.some((e) => e.crossService);
+  // Top God Nodes (top 5)
+  const topGodNodes = [...layout]
+    .sort((a, b) => (b.node.godScore ?? 0) - (a.node.godScore ?? 0))
+    .slice(0, 5);
 
   return (
     <div className="h-full flex flex-col bg-slate-950">
@@ -259,14 +319,14 @@ export function KnowledgeGraphPage() {
           </div>
           <h1 className="text-2xl font-light text-slate-50 tracking-tight">위키 링크 그래프</h1>
           <p className="text-xs text-slate-500 mt-1">
-            노드 클릭 시 상세 페이지로 이동합니다. 빨간 점선 = 깨진 링크. 보라 점선 = 서비스 간 링크.
+            노드 클릭 시 상세 페이지로 이동. 엣지 클릭 시 관계 상세 검사. 빨간 점선 = 깨진 링크. 보라 = 서비스 간 링크.
           </p>
         </div>
       </div>
 
       {/* 필터 바 */}
       <div className="px-6 py-3 border-b border-slate-800 flex flex-wrap gap-4 items-center">
-        {/* 서비스 필터 (신규) */}
+        {/* 서비스 필터 */}
         <div className="flex items-center gap-2">
           <label className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
             서비스
@@ -380,45 +440,34 @@ export function KnowledgeGraphPage() {
             width={svgSize.w}
             height={svgSize.h}
             className="w-full h-full"
+            onClick={handleSvgClick}
           >
             {/* 배경 패턴 */}
             <defs>
               <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
                 <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" strokeWidth="0.5" />
               </pattern>
-              <marker
-                id="arrowNormal"
-                viewBox="0 0 10 10"
-                refX="10"
-                refY="5"
-                markerWidth="6"
-                markerHeight="6"
-                orient="auto"
-              >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
-              </marker>
-              <marker
-                id="arrowBroken"
-                viewBox="0 0 10 10"
-                refX="10"
-                refY="5"
-                markerWidth="6"
-                markerHeight="6"
-                orient="auto"
-              >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
-              </marker>
-              <marker
-                id="arrowCross"
-                viewBox="0 0 10 10"
-                refX="10"
-                refY="5"
-                markerWidth="6"
-                markerHeight="6"
-                orient="auto"
-              >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#a855f7" />
-              </marker>
+              {/* 화살표 마커 */}
+              {[
+                { id: 'arrowNormal',   fill: '#475569' },
+                { id: 'arrowBroken',   fill: '#ef4444' },
+                { id: 'arrowCross',    fill: '#a855f7' },
+                { id: 'arrowExplicit', fill: '#06b6d4' },
+                { id: 'arrowImplicit', fill: '#64748b' },
+              ].map(({ id, fill }) => (
+                <marker
+                  key={id}
+                  id={id}
+                  viewBox="0 0 10 10"
+                  refX="10"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto"
+                >
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill={fill} />
+                </marker>
+              ))}
             </defs>
             <rect width="100%" height="100%" fill="url(#grid)" />
 
@@ -428,7 +477,6 @@ export function KnowledgeGraphPage() {
               const tgt = layoutMap.get(edge.to);
               if (!src || !tgt) return null;
 
-              // 노드 경계까지 축소
               const dx = tgt.x - src.x;
               const dy = tgt.y - src.y;
               const dist = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -437,15 +485,36 @@ export function KnowledgeGraphPage() {
 
               const broken = edge.is_broken;
               const cross = edge.crossService;
+              const kind = edge.kind ?? 'explicit'; // 백엔드 미지원 시 fallback
 
-              // 우선순위: broken > cross > normal
-              const strokeColor = broken ? '#ef4444' : cross ? '#a855f7' : '#475569';
-              const strokeDash = broken ? '4 3' : cross ? '4 4' : undefined;
-              const markerEnd = broken
-                ? 'url(#arrowBroken)'
-                : cross
-                ? 'url(#arrowCross)'
-                : 'url(#arrowNormal)';
+              // 우선순위: broken > crossService > kind
+              let strokeColor: string;
+              let strokeDash: string | undefined;
+              let markerEnd: string;
+              let strokeWidth: number;
+
+              if (broken) {
+                strokeColor = '#ef4444';
+                strokeDash = '4 3';
+                markerEnd = 'url(#arrowBroken)';
+                strokeWidth = 1.5;
+              } else if (cross) {
+                strokeColor = '#a855f7';
+                strokeDash = '4 4';
+                markerEnd = 'url(#arrowCross)';
+                strokeWidth = 1.5;
+              } else if (kind === 'explicit') {
+                strokeColor = '#06b6d4'; // cyan
+                strokeDash = undefined;
+                markerEnd = 'url(#arrowExplicit)';
+                strokeWidth = 2;
+              } else {
+                // implicit
+                strokeColor = '#94a3b8'; // slate-400
+                strokeDash = '4 3';
+                markerEnd = 'url(#arrowImplicit)';
+                strokeWidth = 1.5;
+              }
 
               return (
                 <line
@@ -455,43 +524,44 @@ export function KnowledgeGraphPage() {
                   x2={x2}
                   y2={y2}
                   stroke={strokeColor}
-                  strokeWidth={broken || cross ? 1.5 : 1}
+                  strokeWidth={strokeWidth}
                   strokeDasharray={strokeDash}
                   markerEnd={markerEnd}
                   opacity={0.7}
+                  style={{ cursor: 'pointer' }}
                 />
               );
             })}
 
-            {/* 노드 — 색상은 service 기준 */}
+            {/* 노드 — fill: community 색상, stroke: service 색상 */}
             {layout.map((ln) => {
-              const svcId = ln.node.service ?? 'unknown';
-              const color = getServiceColor(svcId).dot;
+              const communityColor = getCommunityColor(ln.node.community ?? 0);
+              const svcColor = getServiceColor(ln.node.service ?? 'unknown').dot;
               const isHovered = hoveredNode === ln.id;
               return (
                 <g
                   key={ln.id}
                   transform={`translate(${ln.x},${ln.y})`}
                   className="cursor-pointer"
-                  onClick={() => handleNodeClick(ln.node)}
+                  onClick={(e) => {
+                    e.stopPropagation(); // SVG onClick 차단
+                    handleNodeClick(ln.node);
+                  }}
                   onMouseEnter={() => setHoveredNode(ln.id)}
                   onMouseLeave={() => setHoveredNode(null)}
                 >
-                  {/* 외곽 글로우 */}
+                  {/* 글로우 */}
                   {isHovered && (
-                    <circle
-                      r={ln.radius + 5}
-                      fill={color}
-                      opacity={0.2}
-                    />
+                    <circle r={ln.radius + 5} fill={communityColor} opacity={0.25} />
                   )}
+                  {/* 노드 원: fill = community, stroke = service */}
                   <circle
                     r={ln.radius}
-                    fill={color}
-                    fillOpacity={0.85}
-                    stroke={isHovered ? '#fff' : color}
-                    strokeWidth={isHovered ? 2 : 1}
-                    strokeOpacity={0.6}
+                    fill={communityColor}
+                    fillOpacity={0.8}
+                    stroke={svcColor}
+                    strokeWidth={isHovered ? 2.5 : 1.5}
+                    strokeOpacity={0.9}
                   />
                   {/* 라벨 */}
                   <text
@@ -540,63 +610,113 @@ export function KnowledgeGraphPage() {
 
         {/* 범례 */}
         {!loading && !error && layout.length > 0 && (
-          <div className="absolute bottom-4 right-4 bg-slate-900/80 border border-slate-800 rounded-lg px-3 py-2 backdrop-blur-sm min-w-[140px]">
-            {/* 서비스 색상 섹션 */}
-            {visibleServices.length > 0 && (
-              <>
-                <div className="text-[10px] font-mono text-slate-500 mb-1.5">서비스</div>
-                <div className="space-y-1 mb-2">
-                  {visibleServices.map((svcId) => {
-                    const cfg = getServiceColor(svcId);
-                    const svcMeta = services.find((s) => s.id === svcId);
-                    const label = svcMeta?.title ?? svcId;
+          <div className="absolute bottom-4 right-4 bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-3 backdrop-blur-sm w-48 space-y-3 overflow-y-auto max-h-[calc(100vh-200px)]">
+            {/* 엣지 종류 */}
+            <div>
+              <div className="text-[10px] font-mono text-slate-500 mb-1.5 uppercase tracking-wider">엣지 종류</div>
+              <div className="space-y-1.5">
+                <LegendEdge stroke="#06b6d4" strokeWidth={2} label="Explicit" labelClass="text-cyan-400" />
+                <LegendEdge stroke="#94a3b8" strokeWidth={1.5} dasharray="4 3" label="Implicit" labelClass="text-slate-400" />
+                <LegendEdge stroke="#a855f7" strokeWidth={1.5} dasharray="4 4" label="Cross-service" labelClass="text-purple-400" />
+                <LegendEdge stroke="#ef4444" strokeWidth={1.5} dasharray="4 3" label="Broken" labelClass="text-red-400" />
+              </div>
+            </div>
+
+            <div className="border-t border-slate-800" />
+
+            {/* Community 목록 */}
+            {communities.length > 0 && (
+              <div>
+                <div className="text-[10px] font-mono text-slate-500 mb-1.5 uppercase tracking-wider">Community</div>
+                <div className="space-y-1">
+                  {communities.map((c) => {
+                    const color = c.color ?? getCommunityColor(c.id);
                     return (
-                      <div key={svcId} className="flex items-center gap-2">
-                        <div
-                          className="w-3 h-3 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: cfg.dot }}
-                        />
-                        <span className={`text-[11px] font-mono truncate ${cfg.text}`}>{label}</span>
+                      <div key={c.id} className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                        <span className="text-[10px] font-mono text-slate-300 truncate">{c.label || `C${c.id}`}</span>
+                        <span className="text-[9px] font-mono text-slate-600 ml-auto flex-shrink-0">{c.size}</span>
                       </div>
                     );
                   })}
                 </div>
-                <div className="border-t border-slate-800 my-2" />
-              </>
+              </div>
             )}
 
-            {/* 엣지 범례 */}
-            <div className="text-[10px] font-mono text-slate-500 mb-1.5">링크 유형</div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <svg width="20" height="6">
-                  <line x1="0" y1="3" x2="20" y2="3" stroke="#475569" strokeWidth="1" />
-                </svg>
-                <span className="text-[11px] text-slate-400 font-mono">일반 링크</span>
+            {communities.length > 0 && topGodNodes.length > 0 && (
+              <div className="border-t border-slate-800" />
+            )}
+
+            {/* Top God Nodes */}
+            {topGodNodes.length > 0 && (
+              <div>
+                <div className="text-[10px] font-mono text-slate-500 mb-1.5 uppercase tracking-wider">Top God Nodes</div>
+                <div className="space-y-1">
+                  {topGodNodes.map((ln, i) => (
+                    <div key={ln.id} className="flex items-center gap-1.5">
+                      <span className="text-[9px] font-mono text-slate-600 w-3 text-right flex-shrink-0">{i + 1}</span>
+                      <div
+                        className="w-2 h-2 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: getCommunityColor(ln.node.community ?? 0) }}
+                      />
+                      <span className="text-[10px] font-mono text-slate-300 truncate">{ln.node.title}</span>
+                      <span className="text-[9px] font-mono text-amber-600 ml-auto flex-shrink-0">
+                        {((ln.node.godScore ?? 0) * 100).toFixed(0)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <svg width="20" height="6">
-                  <line x1="0" y1="3" x2="20" y2="3" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
-                </svg>
-                <span className="text-[11px] text-red-400 font-mono">깨진 링크</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <svg width="20" height="6">
-                  <line x1="0" y1="3" x2="20" y2="3" stroke="#a855f7" strokeWidth="1.5" strokeDasharray="4 4" />
-                </svg>
-                <span className="text-[11px] text-purple-400 font-mono">교차 서비스</span>
-              </div>
+            )}
+
+            {/* 노드 색상 설명 */}
+            <div className="border-t border-slate-800" />
+            <div>
+              <div className="text-[9px] font-mono text-slate-600">노드 fill = community</div>
+              <div className="text-[9px] font-mono text-slate-600">노드 stroke = service</div>
             </div>
-
-            {/* cross-service 없을 때 안내 */}
-            {!hasCrossService && (
-              <p className="text-[9px] text-slate-600 mt-1.5">
-                (P4 마이그레이션 후 교차 링크 표시)
-              </p>
-            )}
           </div>
         )}
       </div>
+
+      {/* EdgeInspectorPanel */}
+      {activeEdge && (
+        <EdgeInspectorPanel
+          from={activeEdge.from}
+          to={activeEdge.to}
+          onClose={() => setActiveEdge(null)}
+          onPromoted={() => {
+            setActiveEdge(null);
+            setGraphKey((k) => k + 1);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── 범례 서브 컴포넌트 ───────────────────────────────────────────────────────
+
+interface LegendEdgeProps {
+  stroke: string;
+  strokeWidth: number;
+  dasharray?: string;
+  label: string;
+  labelClass: string;
+}
+
+function LegendEdge({ stroke, strokeWidth, dasharray, label, labelClass }: LegendEdgeProps) {
+  return (
+    <div className="flex items-center gap-2">
+      <svg width="22" height="6" className="flex-shrink-0">
+        <line
+          x1="0" y1="3" x2="22" y2="3"
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+          strokeDasharray={dasharray}
+        />
+      </svg>
+      <span className={`text-[10px] font-mono ${labelClass}`}>{label}</span>
     </div>
   );
 }

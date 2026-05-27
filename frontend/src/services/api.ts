@@ -76,7 +76,7 @@ async function request<T>(
 // Knowledge API
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { KnowledgeDocument, KnowledgeGraphResponse, KnowledgeService, LintReport, IndexRebuildResponse } from '../types';
+import type { KnowledgeDocument, KnowledgeGraphResponse, KnowledgeService, LintReport, IndexRebuildResponse, KnowledgeEdgeDetail } from '../types';
 
 export interface CreateKnowledgeData {
   title: string;
@@ -207,6 +207,20 @@ export const knowledgeApi = {
     recentChanges?: Array<{ timestamp: string; id: string; summary: string }>;
   }> =>
     request('/knowledge/brief', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** 엣지 상세 조회 — GET /api/v1/knowledge/edge?from=ID&to=ID */
+  getEdge: ({ from, to }: { from: string; to: string }): Promise<KnowledgeEdgeDetail> =>
+    request(`/knowledge/edge?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+
+  /** implicit → explicit 승격 — POST /api/v1/knowledge/edge/promote */
+  promoteEdge: ({ from, to, anchorText }: { from: string; to: string; anchorText: string }): Promise<{
+    from: string;
+    to: string;
+    newVersion: number;
+    linkAdded: boolean;
+    anchorText: string;
+  }> =>
+    request('/knowledge/edge/promote', { method: 'POST', body: JSON.stringify({ from, to, anchorText }) }),
 
   /** Raw 소스 업로드 — binary blob + RawSource row 생성 */
   uploadRaw: (file: File, derivedKnowledgeIds?: string[]): Promise<{

@@ -40,6 +40,10 @@ export interface KnowledgeGraphNode {
   category: string;
   service: string;
   backlinks_count?: number;
+  // Phase 2 신규
+  community: number;
+  godScore: number;
+  degree: number;
 }
 
 export interface KnowledgeGraphEdge {
@@ -47,11 +51,49 @@ export interface KnowledgeGraphEdge {
   to: string;
   is_broken?: boolean;
   crossService?: boolean;
+  // Phase 2 신규
+  kind: 'explicit' | 'implicit';
+  weight: number;
+  similarity: number | null;
+}
+
+// Phase 2 신규
+export interface KnowledgeCommunity {
+  id: number;
+  label: string;
+  size: number;
+  color?: string;
+}
+
+export interface KnowledgeGraphMeta {
+  implicitThreshold: number;
+  implicitMaxPerPage: number;
+  explicitEdgeCount: number;
+  implicitEdgeCount: number;
+  communityCount: number;
 }
 
 export interface KnowledgeGraphResponse {
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
+  // Phase 2 신규
+  communities: KnowledgeCommunity[];
+  meta: KnowledgeGraphMeta;
+}
+
+// Phase 2 신규: 엣지 상세 (GET /api/v1/knowledge/edge)
+export interface KnowledgeEdgeDetail {
+  from: KnowledgeDocument;
+  to: KnowledgeDocument;
+  edge: {
+    kind: 'explicit' | 'implicit';
+    weight: number;
+    similarity: number | null;
+    isBroken: boolean;
+    crossService: boolean;
+    fromToExplicit: boolean;
+    toFromExplicit: boolean;
+  } | null;
 }
 
 // Karpathy v2: Lint 보고서 (백엔드 실제 응답 shape)
