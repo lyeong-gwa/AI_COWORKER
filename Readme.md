@@ -338,30 +338,51 @@ curl http://localhost:8002/api/v1/warehouse/instances/exec-...
 # 또는 웹 UI 에서 실행 카드 ▶ 클릭 → 진행상황·결과 추적
 ```
 
-### 11-8. 인접 시스템 (선택 — 워크플로에서 호출)
+### 11-8. 외부 API 의존 (워크플로의 api-call 노드 대상)
 
-| 시스템 | 포트 | 역할 | git repo |
-|---|---|---|---|
-| **목업 API 서버** | 8001 | 사내 Jira/Confluence/메신저/메일 모사 + 문의글 fixture | 별도 폴더 (현재 git 미초기화) |
-| **코드정적분석** | 8000 / 5173 | LLM 기반 정적분석 결과 제공 | 별도 repo |
+본 시스템은 외부 API 를 코드에서 직접 호출하지 않습니다. 모두 등록된 **API 명세** 를 통해 호출 (`api-call` / `api-start` / `ai-api-router` 노드가 `apiDefinitionId` 로 참조).
 
-본 시스템 단독 운영 가능. 위 두 시스템은 워크플로의 `api-call`·`api-start` 노드가 호출할 때만 필요.
+→ 환경 이동 시 **워크플로는 그대로**, `api-definitions` 의 `urlTemplate` 만 사내 URL 로 PATCH.
+
+| 단계 | API 명세가 가리키는 곳 |
+|---|---|
+| **개발 (사외망)** | 같은 폴더의 `목업 API 서버 (8001)` — **개발용 더미 fixture**. PoC·테스트 전용 |
+| **운영 (사내 폐쇄망)** | 사내 진짜 Jira / Confluence / 메신저 / 메일 / 형상서버 등 |
+
+목업 API 서버는 개발 단계 stand-in 이므로 **폐쇄망에는 가져가지 않습니다**. 사내 이식 시 다음과 같이 명세 URL 만 교체:
+
+```bash
+# 예) 개발에서 8001 목업으로 만들었던 명세를 사내 ITSM URL 로 갱신
+curl -X PATCH http://localhost:8002/api/v1/api-definitions/api-a52ec6a0 \
+  -H "Content-Type: application/json" \
+  -d '{"urlTemplate":"https://intra.company.com/itsm/inquiries?status={status}"}'
+```
+
+같은 워크플로·노드·지식이 그대로 동작합니다.
 
 ### 11-9. 폐쇄망 운영 노트
+
+**가져가는 것은 AI 업무도우미 한 시스템뿐입니다.** 인접 시스템(목업 API·정적분석 등) 은 개발 환경 자원이며, 폐쇄망에서는 사내 진짜 시스템이 그 자리를 대신합니다 (§11-8 참고).
 
 | 컴포넌트 | 폐쇄망 호환 |
 |---|---|
 | ChromaDB (벡터 저장) | ✅ 로컬 |
 | ONNX 임베딩 (`jhgan_ko-sroberta-multitask`) | ✅ 로컬 (모델 파일 사전 배치) |
 | SQLite | ✅ 로컬 |
-| **LLM 호출** | ⚠️ OpenAI/Anthropic API 직접 호출 불가 → **CLI 핸들러 필요** (계획 단계) |
+| **외부 API 호출** | ✅ `api-definitions` 의 `urlTemplate` 만 사내 URL 로 PATCH (§11-8) |
+| **LLM 호출** | ⚠️ OpenAI/Anthropic API 직접 호출 불가 → 사내 LLM Gateway 를 `custom_api` 핸들러로 연결, 또는 추후 **CLI 핸들러 추가** 후 `LLM_PROVIDER=cli` |
 | 지식 검색·그래프·brief | ✅ LLM 없이 동작 (임베딩만 사용) |
-| Lint 동적 검사·archive restore·enrich | ⚠️ LLM 필요 (CLI 핸들러 추가 후 가능) |
+| Lint 동적 검사·archive restore·enrich | ⚠️ LLM 필요 (위 LLM 호출 경로 확보 후 가능) |
 
-폐쇄망 이식 절차:
-1. 사외망 PC 에서 ONNX 모델 + ChromaDB 만들기 → `backend/models/onnx/`, `backend/data/chroma/` 폴더 통째 복사
-2. requirements.txt 의존을 사내 PyPI 미러로 받거나 wheels 미리 챙김
-3. `.env` 의 `LLM_PROVIDER=custom_api` + 사내 LLM Gateway URL/Key 또는 추후 `LLM_PROVIDER=cli`
+폐쇄망 이식 절차 (AI 업무도우미 단독):
+
+1. **AI 업무도우미 repo 만 clone** (목업 API·정적분석 등 인접 폴더는 이식 대상 아님)
+2. 사외망 PC 에서 **ONNX 모델 미리 받음** → `backend/models/onnx/` 폴더 통째 복사 (또는 사내 모델 저장소 활용)
+3. (선택) 사외망에서 검증한 **ChromaDB 도 함께 복사** → `backend/data/chroma/`. 없으면 사내에서 신규 빌드
+4. `requirements.txt` 의존을 **사내 PyPI 미러**로 받거나 wheels 미리 챙김
+5. `.env` 의 LLM provider 를 **사내 LLM Gateway** (custom_api 핸들러) 또는 **CLI 핸들러** (계획 단계) 로 설정
+6. **`api-definitions` 의 모든 `urlTemplate` 을 사내 진짜 API URL 로 PATCH** (개발 시 목업 8001 자리에 진짜 사내 시스템 — §11-8)
+7. 워크플로 / 노드 / 지식 정의는 변경 없이 그대로 동작
 
 ### 11-10. 테스트·빌드 검증
 
