@@ -553,7 +553,7 @@ export const nodeApi = {
 // Workflow API
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Workflow, WorkflowDeletePreview } from '../types';
+import type { Workflow, WorkflowDeletePreview, WorkflowScheduleConfig, WorkflowScheduleUpdateResponse, WorkflowScheduleNextRun } from '../types';
 
 export interface CreateWorkflowData {
   name: string;
@@ -593,6 +593,7 @@ export interface WorkflowSummary {
   nodeCount: number;
   createdAt: string;
   updatedAt: string;
+  scheduleConfig?: WorkflowScheduleConfig;
 }
 
 export interface WorkflowExecution {
@@ -700,6 +701,26 @@ export const workflowApi = {
   streamExecution: (executionId: string): EventSource => {
     return new EventSource(`${API_BASE}/workflows/executions/${executionId}/stream`);
   },
+
+  // ── 스케줄러 API (Phase B) ────────────────────────────────────────────────
+
+  /** 스케줄 설정 갱신 — PATCH /workflows/{id}/schedule */
+  updateSchedule: (
+    wfId: string,
+    body: { enabled: boolean; cronExpr: string; timezone?: string },
+  ): Promise<WorkflowScheduleUpdateResponse> =>
+    request(`/workflows/${wfId}/schedule`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  /** 다음 실행 예정 시각 조회 — GET /workflows/{id}/schedule/next-run */
+  getScheduleNextRun: (wfId: string): Promise<WorkflowScheduleNextRun> =>
+    request(`/workflows/${wfId}/schedule/next-run`),
+
+  /** 즉시 실행 — POST /ops/scheduler/trigger/{wfId} */
+  triggerNow: (wfId: string): Promise<{ message: string; workflowId: string; instanceId?: string }> =>
+    request(`/ops/scheduler/trigger/${wfId}`, { method: 'POST' }),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -92,6 +92,38 @@ async def init_db() -> None:
         except Exception:
             pass
 
+    # 마이그레이션 (2026-05-27): workflows.schedule_config 컬럼 추가 (스케줄러 UI Phase A).
+    # 기존 row 는 default JSON 으로 채운다. SQLite 는 ALTER TABLE ADD COLUMN 의 DEFAULT 에
+    # 함수/표현식을 직접 받지 못하므로 NULL 로 추가한 뒤 UPDATE 로 일괄 채운다.
+    async with engine.begin() as conn:
+        try:
+            cols = await conn.execute(text("PRAGMA table_info(workflows)"))
+            col_names = [row[1] for row in cols.fetchall()]
+            if "schedule_config" not in col_names:
+                await conn.execute(
+                    text("ALTER TABLE workflows ADD COLUMN schedule_config JSON")
+                )
+                # 기존 모든 워크플로우에 default 부여
+                await conn.execute(
+                    text(
+                        "UPDATE workflows SET schedule_config = "
+                        "'{\"enabled\": false, \"cronExpr\": \"0 * * * *\", \"timezone\": \"Asia/Seoul\"}' "
+                        "WHERE schedule_config IS NULL"
+                    )
+                )
+                print("[MIGRATE] workflows.schedule_config 컬럼 추가 + 기존 row default 부여")
+            else:
+                # 컬럼이 이미 있지만 NULL 인 row 가 있을 수 있다 (방어적)
+                await conn.execute(
+                    text(
+                        "UPDATE workflows SET schedule_config = "
+                        "'{\"enabled\": false, \"cronExpr\": \"0 * * * *\", \"timezone\": \"Asia/Seoul\"}' "
+                        "WHERE schedule_config IS NULL"
+                    )
+                )
+        except Exception as e:
+            print(f"[MIGRATE] workflows.schedule_config 마이그레이션 스킵: {e}")
+
     # 마이그레이션 (2026-05-12): InstanceDB 파일시스템 재설계 — 구 SQLite 테이블 폐기.
     # 운영 잔재 1건이 있더라도 records 0건이므로 안전하게 drop.
     # 파일시스템(backend/data/instance_dbs/) 으로 이전됨.

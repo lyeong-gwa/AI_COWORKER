@@ -268,6 +268,9 @@ export interface Workflow {
     config: Record<string, unknown>;
   };
 
+  // 스케줄 설정 (Phase B)
+  scheduleConfig?: WorkflowScheduleConfig;
+
   // 메타데이터
   tags: string[];
   createdBy?: string;              // 'cli' | 'web'
@@ -641,6 +644,26 @@ export interface InstanceDBRecordListResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+// ─── Workflow Schedule Types (Phase B) ───────────────────────────────────────
+
+export interface WorkflowScheduleConfig {
+  enabled: boolean;
+  cronExpr: string;
+  timezone: string;
+}
+
+export interface WorkflowScheduleUpdateResponse {
+  workflowId: string;
+  scheduleConfig: WorkflowScheduleConfig;
+  nextRunTime?: string | null;
+}
+
+export interface WorkflowScheduleNextRun {
+  workflowId: string;
+  nextRunTime: string | null;
+  registered: boolean;
 }
 
 // ─── Workflow Delete Preview ──────────────────────────────────────────────────

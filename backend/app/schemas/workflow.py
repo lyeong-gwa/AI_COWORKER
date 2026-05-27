@@ -81,6 +81,17 @@ class TriggerConfig(BaseModel):
     config: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ScheduleConfigUpdate(BaseModel):
+    """워크플로우 스케줄러 설정 갱신 요청 (PATCH /workflows/{id}/schedule).
+
+    cronExpr 는 APScheduler/croniter 5-field 표준을 따른다.
+    timezone 미지정 시 Asia/Seoul 유지.
+    """
+    enabled: bool
+    cronExpr: str = Field(..., min_length=1)
+    timezone: Optional[str] = None
+
+
 class WorkflowBase(BaseModel):
     """워크플로우 기본 스키마"""
     name: str = Field(..., min_length=1, max_length=100)

@@ -15,6 +15,7 @@ import { EmptyState } from '../components/common/EmptyState';
 import { CliHint } from '../components/common/CliHint';
 import { useToast } from '../components/common/Toast';
 import { WorkflowDeleteConfirmModal } from '../components/workflow/WorkflowDeleteConfirmModal';
+import { cronToLabel } from '../components/workflow/WorkflowScheduleCard';
 
 type SortKey = 'updatedDesc' | 'updatedAsc' | 'nameAsc';
 
@@ -215,18 +216,29 @@ export default function WorkflowListPage() {
                       <p className="text-xs text-slate-500 mt-0.5 truncate">
                         {wf.description || '설명 없음'}
                       </p>
-                      {wf.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1.5">
-                          {wf.tags.slice(0, 4).map((tag) => (
-                            <span
-                              key={tag}
-                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-400 border border-slate-700/60"
-                            >
-                              #{tag}
+                      <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                        {wf.tags.slice(0, 4).map((tag) => (
+                          <span
+                            key={tag}
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-400 border border-slate-700/60"
+                          >
+                            #{tag}
+                          </span>
+                        ))}
+                        {/* 스케줄 배지 */}
+                        {wf.scheduleConfig && (
+                          wf.scheduleConfig.enabled ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-cyan-600/50 bg-cyan-900/30 px-2 py-0.5 text-[10px] font-mono text-cyan-300">
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse flex-shrink-0" />
+                              &#x23F0; ON &middot; {cronToLabel(wf.scheduleConfig.cronExpr)}
                             </span>
-                          ))}
-                        </div>
-                      )}
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-slate-700/60 bg-slate-800/40 px-2 py-0.5 text-[10px] font-mono text-slate-500">
+                              &#x23F0; OFF
+                            </span>
+                          )
+                        )}
+                      </div>
                     </div>
 
                     {/* Right: meta */}

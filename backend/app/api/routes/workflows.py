@@ -21,7 +21,7 @@ from ...models.workflow import (
 )
 from ...schemas.workflow import (
     WorkflowCreate, WorkflowUpdate,
-    ExecutionCreate,
+    ExecutionCreate, ScheduleConfigUpdate,
 )
 from ...services.workflow_engine import execute_workflow
 from ...services.audit import log as audit_log
@@ -64,6 +64,21 @@ def workflow_connection_to_camel(conn: WorkflowConnection) -> dict:
     }
 
 
+_DEFAULT_SCHEDULE_CONFIG = {
+    "enabled": False,
+    "cronExpr": "0 * * * *",
+    "timezone": "Asia/Seoul",
+}
+
+
+def _schedule_config_or_default(wf: Workflow) -> dict:
+    """schedule_config 가 None/누락이면 default 반환 (안전한 응답 직렬화용)."""
+    cfg = getattr(wf, "schedule_config", None)
+    if not isinstance(cfg, dict):
+        return dict(_DEFAULT_SCHEDULE_CONFIG)
+    return cfg
+
+
 def workflow_to_camel(wf: Workflow) -> dict:
     """Workflow ORM -> camelCase dict (full detail)"""
     return {
@@ -74,6 +89,7 @@ def workflow_to_camel(wf: Workflow) -> dict:
         "tags": wf.tags,
         "trigger": wf.trigger,
         "variables": wf.variables,
+        "scheduleConfig": _schedule_config_or_default(wf),
         "createdBy": wf.created_by,
         "nodes": [workflow_node_to_camel(n) for n in wf.nodes],
         "connections": [workflow_connection_to_camel(c) for c in wf.connections],
@@ -91,6 +107,7 @@ def workflow_summary_to_camel(wf: Workflow) -> dict:
         "status": wf.status.value if wf.status else None,
         "tags": wf.tags,
         "nodeCount": len(wf.nodes),
+        "scheduleConfig": _schedule_config_or_default(wf),
         "createdBy": wf.created_by,
         "createdAt": wf.created_at.isoformat() if wf.created_at else None,
         "updatedAt": wf.updated_at.isoformat() if wf.updated_at else None,
@@ -331,6 +348,159 @@ async def update_workflow(
     workflow = result.scalar_one()
     await _safe_reload_jobs()
     return workflow_to_camel(workflow)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Workflow Schedule (UI 토글 + cron 표현식)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _validate_cron_expr(expr: str, tz: str) -> None:
+    """cron 표현식 유효성 검증. 실패 시 ValidationError(422) 발생."""
+    try:
+        CronTriggerImport = _import_cron_trigger()
+        CronTriggerImport.from_crontab(expr, timezone=tz)
+    except Exception as e:
+        raise ValidationError(
+            "유효하지 않은 cron 표현식입니다",
+            code="INVALID_CRON_EXPR",
+            status_code=422,
+            details={"cronExpr": expr, "timezone": tz, "reason": str(e)},
+        )
+
+
+def _import_cron_trigger():
+    # lazy 로 import 하여 테스트 콜드스타트 영향 최소화
+    from apscheduler.triggers.cron import CronTrigger  # noqa: WPS433
+    return CronTrigger
+
+
+@router.patch(
+    "/{workflow_id}/schedule",
+    summary="워크플로우 스케줄 설정 갱신 (토글 + cron)",
+    description=(
+        "워크플로우의 `schedule_config` 를 갱신하고 APScheduler job 을 자동으로 reload 한다. "
+        "cron 표현식은 5-field 표준이며 검증 실패 시 422 반환. "
+        "응답에는 갱신된 scheduleConfig 와 (등록된 경우) 다음 실행 시각이 포함된다."
+    ),
+)
+async def update_workflow_schedule(
+    workflow_id: str,
+    data: ScheduleConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """schedule_config 갱신 + reload_jobs 자동 호출."""
+    result = await db.execute(
+        select(Workflow).where(Workflow.id == workflow_id)
+    )
+    workflow = result.scalar_one_or_none()
+    if not workflow:
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
+
+    tz = data.timezone or "Asia/Seoul"
+    # cron 표현식 유효성 검증 (활성/비활성 무관 — 잘못된 표현식 저장 방지)
+    _validate_cron_expr(data.cronExpr, tz)
+
+    new_cfg = {
+        "enabled": bool(data.enabled),
+        "cronExpr": data.cronExpr.strip(),
+        "timezone": tz,
+    }
+    workflow.schedule_config = new_cfg
+    # JSON 컬럼 in-place 변경 트래킹 위해 flag 보장
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(workflow, "schedule_config")
+    except Exception:
+        pass
+
+    await db.commit()
+    await db.refresh(workflow)
+
+    # 스케줄러 reload (best-effort) — 동기적으로 호출하여 즉시 반영
+    try:
+        from ...core.scheduler import reload_jobs
+        await reload_jobs()
+    except Exception:
+        pass
+
+    # 다음 실행 시각 계산
+    next_run_iso: Optional[str] = None
+    try:
+        from ...core.scheduler import get_scheduler
+        sch = get_scheduler()
+        if sch is not None:
+            job = sch.get_job(f"wf:{workflow_id}")
+            if job and job.next_run_time:
+                next_run_iso = job.next_run_time.isoformat()
+    except Exception:
+        pass
+
+    await audit_log(
+        db,
+        "system",
+        "workflow.schedule.update",
+        "workflow",
+        workflow_id,
+        {
+            "enabled": new_cfg["enabled"],
+            "cronExpr": new_cfg["cronExpr"],
+            "timezone": new_cfg["timezone"],
+        },
+    )
+
+    return {
+        "workflowId": workflow_id,
+        "scheduleConfig": new_cfg,
+        "nextRunTime": next_run_iso,
+    }
+
+
+@router.get(
+    "/{workflow_id}/schedule/next-run",
+    summary="워크플로우의 다음 스케줄 실행 시각 조회",
+    description=(
+        "APScheduler 에 등록된 job 의 next_run_time 을 반환한다. "
+        "등록되지 않은 경우 `registered=false`, `nextRunTime=null` 반환."
+    ),
+)
+async def get_workflow_schedule_next_run(
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """등록된 job 의 next_run_time 1건 조회."""
+    # 워크플로우 존재 확인
+    wf = (await db.execute(
+        select(Workflow).where(Workflow.id == workflow_id)
+    )).scalar_one_or_none()
+    if not wf:
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
+
+    next_run_iso: Optional[str] = None
+    registered = False
+    try:
+        from ...core.scheduler import get_scheduler
+        sch = get_scheduler()
+        if sch is not None:
+            job = sch.get_job(f"wf:{workflow_id}")
+            if job is not None:
+                registered = True
+                if job.next_run_time:
+                    next_run_iso = job.next_run_time.isoformat()
+    except Exception:
+        pass
+
+    return {
+        "workflowId": workflow_id,
+        "nextRunTime": next_run_iso,
+        "registered": registered,
+    }
 
 
 @router.get(

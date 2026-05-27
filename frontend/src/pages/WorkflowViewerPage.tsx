@@ -26,6 +26,7 @@ import { AINodesContext } from '../components/workflow/FactoryNode';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { EmptyState } from '../components/common/EmptyState';
 import { useToast } from '../components/common/Toast';
+import { WorkflowScheduleCard } from '../components/workflow/WorkflowScheduleCard';
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -620,21 +621,35 @@ export default function WorkflowViewerPage() {
         )}
       </div>
 
-      {/* Instance list */}
+      {/* Instance list + Schedule card */}
       <section className="flex-1 min-h-0 overflow-auto border-t border-slate-800 bg-slate-950">
-        <div className="w-full px-6 py-6">
-          <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-sm font-mono tracking-[0.2em] uppercase text-slate-400">
-              최근 실행기록
-            </h2>
-            <button
-              onClick={loadInstances}
-              className="text-xs font-mono text-slate-500 hover:text-sky-400 transition-colors"
-            >
-              새로고침 ↻
-            </button>
+        <div className="w-full px-6 py-6 flex gap-6 items-start">
+          {/* 실행기록 (main) */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-sm font-mono tracking-[0.2em] uppercase text-slate-400">
+                최근 실행기록
+              </h2>
+              <button
+                onClick={loadInstances}
+                className="text-xs font-mono text-slate-500 hover:text-sky-400 transition-colors"
+              >
+                새로고침 ↻
+              </button>
+            </div>
+            <InstanceList workflowId={workflow.id} instances={instances} loading={loadingIns} onDelete={handleDeleteInstance} />
           </div>
-          <InstanceList workflowId={workflow.id} instances={instances} loading={loadingIns} onDelete={handleDeleteInstance} />
+
+          {/* 스케줄러 카드 (side panel) */}
+          {workflow.scheduleConfig && (
+            <div className="flex-shrink-0 w-72">
+              <WorkflowScheduleCard
+                workflowId={workflow.id}
+                initialConfig={workflow.scheduleConfig}
+                onSaved={loadInstances}
+              />
+            </div>
+          )}
         </div>
       </section>
 
