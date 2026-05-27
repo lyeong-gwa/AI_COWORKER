@@ -53,6 +53,14 @@ class KnowledgeCreate(BaseModel):
     page_type: PageType = Field(..., description="5종 enum 강제")
     tags: List[str] = Field(default_factory=list)
     source: Optional[str] = None
+    source_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "외부 참고 URL (LLM 의 URL hallucination 차단용). 명시 지정 시 frontmatter "
+            "에 보존, 응답에 노출. None/빈 문자열이면 frontmatter 미기재 → LLM 은 URL "
+            "을 만들어내지 않는다."
+        ),
+    )
     raw_source_id: Optional[str] = Field(default=None, description="RawSource FK (선택)")
     api: Optional[Dict[str, Any]] = None
     operator: Optional[str] = Field(default="cli", description="changelog operator 식별자")
@@ -79,6 +87,13 @@ class KnowledgeUpdate(BaseModel):
     page_type: Optional[PageType] = None
     tags: Optional[List[str]] = None
     source: Optional[str] = None
+    source_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "외부 참고 URL (LLM URL hallucination 차단). 빈 문자열을 보내면 frontmatter "
+            "에서 제거된다. None 은 '미변경' 의미."
+        ),
+    )
     raw_source_id: Optional[str] = None
     api: Optional[Dict[str, Any]] = None
     operator: Optional[str] = Field(default="cli", description="changelog operator 식별자")

@@ -98,6 +98,7 @@ def _doc_to_response(doc: KnowledgeFileDoc, *, warnings: Optional[List[str]] = N
         "service": doc.service or "unknown",
         "tags": doc.tags,
         "source": doc.source,
+        "sourceUrl": doc.source_url,
         "pageType": doc.page_type,
         "version": doc.version,
         "links": list(doc.links),
@@ -140,19 +141,24 @@ def _sync_doc_to_chroma(doc: KnowledgeFileDoc) -> None:
         from ...services.embedding import get_vector_db
         vector_db = get_vector_db()
         content_hash = compute_hash(doc.content)
+        meta: Dict[str, Any] = {
+            "title": doc.title,
+            "category": doc.category or "",
+            "service": doc.service or "unknown",
+            "source": doc.source or "",
+            "content_hash": content_hash,
+            "page_type": doc.page_type or "Summary",
+            "version": doc.version or 1,
+            "links": list(doc.links or []),
+        }
+        # source_url 은 None 이면 metadata 에 _기록하지 않는다_ (LLM URL hallucination 차단).
+        # ChromaDB 가 None 을 거부하므로 빈 키 자체를 생략한다.
+        if doc.source_url:
+            meta["source_url"] = doc.source_url
         vector_db.add_document(
             doc_id=doc.id,
             content=doc.content,
-            metadata={
-                "title": doc.title,
-                "category": doc.category or "",
-                "service": doc.service or "unknown",
-                "source": doc.source or "",
-                "content_hash": content_hash,
-                "page_type": doc.page_type or "Summary",
-                "version": doc.version or 1,
-                "links": list(doc.links or []),
-            },
+            metadata=meta,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("[KNOWLEDGE_SYNC] ChromaDB sync 실패 — 파일은 보존됨: %s", e)
@@ -419,19 +425,22 @@ async def reindex_services():
     for doc in docs:
         try:
             content_hash = compute_hash(doc.content)
+            meta: Dict[str, Any] = {
+                "title": doc.title,
+                "category": doc.category or "",
+                "service": doc.service or "unknown",
+                "source": doc.source or "",
+                "content_hash": content_hash,
+                "page_type": doc.page_type or "Summary",
+                "version": doc.version or 1,
+                "links": list(doc.links or []),
+            }
+            if doc.source_url:
+                meta["source_url"] = doc.source_url
             vector_db.add_document(
                 doc_id=doc.id,
                 content=doc.content,
-                metadata={
-                    "title": doc.title,
-                    "category": doc.category or "",
-                    "service": doc.service or "unknown",
-                    "source": doc.source or "",
-                    "content_hash": content_hash,
-                    "page_type": doc.page_type or "Summary",
-                    "version": doc.version or 1,
-                    "links": list(doc.links or []),
-                },
+                metadata=meta,
             )
             synced += 1
         except Exception as exc:  # noqa: BLE001
@@ -904,6 +913,7 @@ async def promote_edge_to_explicit(
         links=new_links,
         raw_source_id=from_doc.raw_source_id,
         service=from_doc.service or "unknown",
+        source_url=from_doc.source_url,
     )
 
     operator = "edge-promote"
@@ -1022,6 +1032,7 @@ async def create_document(data: KnowledgeCreate, db: AsyncSession = Depends(get_
         links=links,
         raw_source_id=data.raw_source_id,
         service=data.service,
+        source_url=data.source_url,
     )
 
     # 6) changelog (create)
@@ -1084,6 +1095,12 @@ async def update_document(
     )
     # multi-service v3 P1: PUT 으로 service 변경 가능. 미지정 시 기존 값 유지.
     new_service = data.service if data.service is not None else (existing.service or "unknown")
+    # source_url: 미지정(None) 이면 기존 유지. 빈 문자열 명시 시 제거 (write_md_file 가
+    # 빈 문자열 → None 으로 정규화하여 frontmatter 에서 빠짐).
+    if data.source_url is not None:
+        new_source_url: Optional[str] = data.source_url
+    else:
+        new_source_url = existing.source_url
 
     # schema 검증 (변경된 enum 필드)
     try:
@@ -1144,6 +1161,7 @@ async def update_document(
         links=new_links,
         raw_source_id=new_raw_source_id,
         service=new_service,
+        source_url=new_source_url,
     )
 
     # changelog (update)
@@ -1253,6 +1271,7 @@ async def delete_document(
                 links=owner_new_links,
                 raw_source_id=owner.raw_source_id,
                 service=owner.service or "unknown",
+                source_url=owner.source_url,
             )
             try:
                 await add_changelog(
@@ -1354,15 +1373,18 @@ def _run_bulk_sync():
     for doc in docs:
         try:
             content_hash = compute_hash(doc.content)
+            meta: Dict[str, Any] = {
+                "title": doc.title,
+                "category": doc.category or "",
+                "source": doc.source or "",
+                "content_hash": content_hash,
+            }
+            if doc.source_url:
+                meta["source_url"] = doc.source_url
             vector_db.add_document(
                 doc_id=doc.id,
                 content=doc.content,
-                metadata={
-                    "title": doc.title,
-                    "category": doc.category or "",
-                    "source": doc.source or "",
-                    "content_hash": content_hash,
-                },
+                metadata=meta,
             )
             synced += 1
         except Exception as e:
@@ -1404,15 +1426,18 @@ async def sync_documents(
             )
 
         content_hash = compute_hash(doc.content)
+        single_meta: Dict[str, Any] = {
+            "title": doc.title,
+            "category": doc.category or "",
+            "source": doc.source or "",
+            "content_hash": content_hash,
+        }
+        if doc.source_url:
+            single_meta["source_url"] = doc.source_url
         vector_db.add_document(
             doc_id=doc.id,
             content=doc.content,
-            metadata={
-                "title": doc.title,
-                "category": doc.category or "",
-                "source": doc.source or "",
-                "content_hash": content_hash,
-            },
+            metadata=single_meta,
         )
 
         # 동기화 후 상태 재조회

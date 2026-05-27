@@ -661,7 +661,9 @@ CATALOG: List[NodeCatalogEntry] = [
                     "검색 결과 배열. 각 요소: "
                     "{id: string, content: string, score: number, title: string, category: string, "
                     "service: string (multi-service v3 P2), tags: string, page_type: string, "
-                    "version: number, links: array}."
+                    "version: number, links: array, source_url: string|null}. "
+                    "source_url: 외부 참고 URL. null 인 페이지는 LLM 이 URL 을 만들어내지 "
+                    "않도록 system prompt 가 차단해야 한다."
                 ),
             ),
             NodeIOField(

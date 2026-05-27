@@ -44,6 +44,7 @@ class KnowledgeFileDoc:
     page_type: str = "Summary"  # NEW (v2)
     tags: List[str] = field(default_factory=list)
     source: str = ""
+    source_url: Optional[str] = None  # NEW (URL hallucination 차단)
     raw_source_id: Optional[str] = None  # NEW (v2)
     version: int = 1  # NEW (v2)
     links: List[str] = field(default_factory=list)  # NEW (v2)
@@ -119,6 +120,7 @@ def build_md_file(
     links: Optional[List[str]] = None,
     raw_source_id: Optional[str] = None,
     service: Optional[str] = None,
+    source_url: Optional[str] = None,
 ) -> str:
     """YAML frontmatter + 마크다운 본문 생성.
 
@@ -127,6 +129,9 @@ def build_md_file(
 
     다중 서비스 v3: `service` 가 None 이 아니면 frontmatter 에 보존. extra_metadata
     안의 동일 키는 명시 인자에 의해 덮어쓰여진다.
+
+    source_url: 외부 참고 URL (LLM 의 URL hallucination 차단용). None/빈 문자열이면
+    frontmatter 에 _기록하지 않는다_ (재로드 시 None 으로 유지).
     """
     import yaml
 
@@ -152,11 +157,14 @@ def build_md_file(
     # 다중 서비스 v3 — service 가 명시되면 frontmatter 에 보존.
     if service is not None:
         metadata["service"] = str(service)
+    # source_url — 명시 지정 시 (빈 문자열 포함 X) frontmatter 에 보존.
+    if source_url is not None and str(source_url).strip():
+        metadata["source_url"] = str(source_url).strip()
 
     # 비표준 메타데이터 병합 (api 등) — 단 표준 키는 위에서 이미 결정됨.
     if extra_metadata:
         for k, v in extra_metadata.items():
-            if k in {"page_type", "version", "links", "raw_source_id", "service"}:
+            if k in {"page_type", "version", "links", "raw_source_id", "service", "source_url"}:
                 # 명시 인자가 우선이므로 extra 의 동일 키는 무시
                 continue
             metadata[k] = v
@@ -236,7 +244,7 @@ def list_md_files(chroma_hashes: Optional[Dict[str, str]] = None) -> List[Knowle
         _STANDARD_KEYS = {
             "title", "category", "tags", "source", "created",
             "page_type", "version", "links", "raw_source_id",
-            "service",
+            "service", "source_url",
         }
         extra_meta = {k: v for k, v in metadata.items() if k not in _STANDARD_KEYS}
 
@@ -260,6 +268,14 @@ def list_md_files(chroma_hashes: Optional[Dict[str, str]] = None) -> List[Knowle
         if not service_val:
             service_val = "unknown"
 
+        # source_url — frontmatter 미기재 또는 빈 값 → None (URL hallucination 차단)
+        source_url_raw = metadata.get("source_url")
+        if source_url_raw is None:
+            source_url_val: Optional[str] = None
+        else:
+            tmp = str(source_url_raw).strip()
+            source_url_val = tmp if tmp else None
+
         docs.append(KnowledgeFileDoc(
             id=doc_id,
             title=metadata.get("title", doc_id),
@@ -269,6 +285,7 @@ def list_md_files(chroma_hashes: Optional[Dict[str, str]] = None) -> List[Knowle
             page_type=page_type,
             tags=tags_raw,
             source=metadata.get("source", ""),
+            source_url=source_url_val,
             raw_source_id=raw_source_id,
             version=version,
             links=links_raw,
@@ -338,7 +355,7 @@ def read_md_file(doc_id: str, chroma_hashes: Optional[Dict[str, str]] = None) ->
     _STANDARD_KEYS = {
         "title", "category", "tags", "source", "created",
         "page_type", "version", "links", "raw_source_id",
-        "service",
+        "service", "source_url",
     }
     extra_meta = {k: v for k, v in metadata.items() if k not in _STANDARD_KEYS}
 
@@ -361,6 +378,14 @@ def read_md_file(doc_id: str, chroma_hashes: Optional[Dict[str, str]] = None) ->
     if not service_val:
         service_val = "unknown"
 
+    # source_url — frontmatter 미기재 또는 빈 값 → None (URL hallucination 차단)
+    source_url_raw = metadata.get("source_url")
+    if source_url_raw is None:
+        source_url_val: Optional[str] = None
+    else:
+        tmp = str(source_url_raw).strip()
+        source_url_val = tmp if tmp else None
+
     return KnowledgeFileDoc(
         id=doc_id,
         title=metadata.get("title", doc_id),
@@ -370,6 +395,7 @@ def read_md_file(doc_id: str, chroma_hashes: Optional[Dict[str, str]] = None) ->
         page_type=page_type,
         tags=tags_raw,
         source=metadata.get("source", ""),
+        source_url=source_url_val,
         raw_source_id=raw_source_id,
         version=version,
         links=links_raw,
@@ -396,6 +422,7 @@ def write_md_file(
     links: Optional[List[str]] = None,
     raw_source_id: Optional[str] = None,
     service: Optional[str] = None,
+    source_url: Optional[str] = None,
 ) -> KnowledgeFileDoc:
     """MD 파일 작성 (생성 또는 덮어쓰기).
 
@@ -405,6 +432,8 @@ def write_md_file(
     v2 신규 키워드 인자: ``page_type``, ``version``, ``links``, ``raw_source_id``
     multi-service v3 키워드 인자: ``service`` (None 이면 frontmatter 에 미기재 →
     재로드 시 default ``"unknown"``).
+    source_url: 외부 참고 URL. None/빈 문자열 이면 frontmatter 에 미기재 →
+    재로드 시 None 으로 유지된다 (LLM URL hallucination 차단).
     """
     knowledge_dir = _knowledge_dir()
     if "/" in doc_id:
@@ -427,6 +456,7 @@ def write_md_file(
         links=links,
         raw_source_id=raw_source_id,
         service=service,
+        source_url=source_url,
     )
 
     with open(filepath, 'w', encoding='utf-8') as f:
@@ -434,6 +464,12 @@ def write_md_file(
 
     content_hash = compute_hash(content)
     now = datetime.utcnow().isoformat()
+
+    # source_url 정규화 — 빈 문자열은 None 으로 (재로드 결과와 일치)
+    normalized_source_url: Optional[str] = None
+    if source_url is not None:
+        tmp = str(source_url).strip()
+        normalized_source_url = tmp if tmp else None
 
     return KnowledgeFileDoc(
         id=safe_id,
@@ -444,6 +480,7 @@ def write_md_file(
         page_type=page_type or "Summary",
         tags=tags or [],
         source=source,
+        source_url=normalized_source_url,
         raw_source_id=raw_source_id,
         version=version if version is not None else 1,
         links=list(links) if links else [],

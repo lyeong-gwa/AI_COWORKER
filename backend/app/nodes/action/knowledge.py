@@ -11,6 +11,11 @@ Multi-service v3 P2 (`.omc/plans/지식-multi-service.md` §2.6):
   - ``categories`` / ``pageTypes`` / ``services`` 모두 동시 결합 가능 (``$and``)
   - 응답 페이로드 item 에 ``service`` 필드 추가
   - 응답 result 에 ``search_services`` 추가 (config.services 설정 시)
+
+source_url 필드 (URL hallucination 차단):
+  - 응답 페이로드 item 에 ``source_url`` 추가. ChromaDB metadata 의 값 그대로 노출.
+  - 없거나 빈 문자열 이면 ``None`` 으로 노출. LLM system prompt 는 None 인 페이지에
+    대해 URL 을 만들어내지 않도록 지시받는다.
 """
 from typing import Any, Dict, List, Optional
 
@@ -188,6 +193,10 @@ class KnowledgeHandler(NodeHandler):
         """SearchResult → response item (P3 §6.3 + multi-service v3 P2 §2.6 응답 shape).
 
         ``page_type``, ``version``, ``links``, ``service`` 노출. 메타에 없으면 default.
+
+        ``source_url``: 외부 참고 URL (LLM URL hallucination 차단). ChromaDB metadata
+        에 source_url 키가 있으면 그 값, 없으면 None. LLM 은 None 인 페이지에 대해
+        URL 을 만들어내서는 안 된다 (system prompt 규칙).
         """
         meta = sr.metadata or {}
 
@@ -205,6 +214,13 @@ class KnowledgeHandler(NodeHandler):
         except (TypeError, ValueError):
             version_v = 1
 
+        # source_url — ChromaDB metadata 의 값 그대로 (없거나 빈 문자열이면 None)
+        source_url_raw = meta.get('source_url')
+        if source_url_raw is None or str(source_url_raw).strip() == '':
+            source_url_val: Optional[str] = None
+        else:
+            source_url_val = str(source_url_raw).strip()
+
         return {
             'id': sr.id,
             'title': meta.get('title', sr.id),
@@ -216,6 +232,7 @@ class KnowledgeHandler(NodeHandler):
             'page_type': meta.get('page_type', 'Summary'),
             'version': version_v,
             'links': links_list,
+            'source_url': source_url_val,
         }
 
     @staticmethod
@@ -259,6 +276,7 @@ class KnowledgeHandler(NodeHandler):
                         'page_type': d.page_type,
                         'version': d.version,
                         'links': list(d.links),
+                        'source_url': d.source_url,
                         'isBacklinkExpansion': True,
                     })
                     seen_local.add(d.id)
