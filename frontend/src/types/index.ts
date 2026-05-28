@@ -652,6 +652,12 @@ export interface WorkflowScheduleConfig {
   enabled: boolean;
   cronExpr: string;
   timezone: string;
+  /**
+   * cron 실행 시 워크플로우의 트리거 입력값으로 전달되는 dict.
+   * form-start 노드의 fields 와 키를 맞추면 sorter / api-call 등 다운스트림 노드가
+   * 정상 동작한다. 비어 있으면 `{"_scheduled": true}` 만 전달된다.
+   */
+  payload?: Record<string, unknown>;
 }
 
 export interface WorkflowScheduleUpdateResponse {

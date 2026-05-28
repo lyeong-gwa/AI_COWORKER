@@ -646,6 +646,7 @@ export default function WorkflowViewerPage() {
               <WorkflowScheduleCard
                 workflowId={workflow.id}
                 initialConfig={workflow.scheduleConfig}
+                triggerNode={triggerNode}
                 onSaved={loadInstances}
               />
             </div>

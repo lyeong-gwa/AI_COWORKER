@@ -86,10 +86,13 @@ class ScheduleConfigUpdate(BaseModel):
 
     cronExpr 는 APScheduler/croniter 5-field 표준을 따른다.
     timezone 미지정 시 Asia/Seoul 유지.
+    payload 는 cron 실행 시 워크플로우의 input_data 로 전달되는 트리거 입력값.
+    None 이면 기존 payload 보존, 빈 dict 면 명시적으로 비움.
     """
     enabled: bool
     cronExpr: str = Field(..., min_length=1)
     timezone: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = None
 
 
 class WorkflowBase(BaseModel):

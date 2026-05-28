@@ -704,10 +704,18 @@ export const workflowApi = {
 
   // ── 스케줄러 API (Phase B) ────────────────────────────────────────────────
 
-  /** 스케줄 설정 갱신 — PATCH /workflows/{id}/schedule */
+  /** 스케줄 설정 갱신 — PATCH /workflows/{id}/schedule.
+   * payload: cron 실행 시 워크플로우의 input_data 로 전달될 트리거 입력값.
+   *   undefined 면 기존 payload 보존, 빈 객체면 명시적으로 비움.
+   */
   updateSchedule: (
     wfId: string,
-    body: { enabled: boolean; cronExpr: string; timezone?: string },
+    body: {
+      enabled: boolean;
+      cronExpr: string;
+      timezone?: string;
+      payload?: Record<string, unknown>;
+    },
   ): Promise<WorkflowScheduleUpdateResponse> =>
     request(`/workflows/${wfId}/schedule`, {
       method: 'PATCH',

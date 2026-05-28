@@ -50,7 +50,12 @@ async def shutdown_scheduler() -> None:
 
 
 async def _run_workflow_job(workflow_id: str) -> None:
-    """cron job 실행 함수 — WorkflowExecution 생성 후 엔진 호출"""
+    """cron job 실행 함수 — WorkflowExecution 생성 후 엔진 호출.
+
+    `schedule_config.payload` 가 dict 이면 트리거 입력값으로 input_data 에 병합한다.
+    예: payload={"status": "신규"} → input_data={"_scheduled": True, "status": "신규"}.
+    `_scheduled` 메타 키는 항상 포함되며, payload 의 동일 키와 충돌 시 payload 가 우선한다.
+    """
     # lazy import (순환 방지)
     from .database import async_session_maker
     from ..models.workflow import Workflow, WorkflowExecution, WorkflowStatus, ExecutionStatus
@@ -68,17 +73,26 @@ async def _run_workflow_job(workflow_id: str) -> None:
                 logger.info(f"[SCHED] 비활성 워크플로우 스킵: {workflow_id}")
                 return
 
+            schedule_config = wf.schedule_config or {}
+            payload = schedule_config.get("payload") if isinstance(schedule_config, dict) else None
+            if not isinstance(payload, dict):
+                payload = {}
+            input_data = {"_scheduled": True, **payload}
+
             execution = WorkflowExecution(
                 id=f"exec-{uuid.uuid4().hex[:8]}",
                 workflow_id=workflow_id,
                 status=ExecutionStatus.PENDING,
-                input_data={"_scheduled": True},
+                input_data=input_data,
             )
             db.add(execution)
             await db.commit()
             await db.refresh(execution)
             exec_id = execution.id
-        logger.info(f"[SCHED] 워크플로우 실행 시작: {workflow_id} (exec={exec_id})")
+        logger.info(
+            f"[SCHED] 워크플로우 실행 시작: {workflow_id} (exec={exec_id}) "
+            f"payloadKeys={sorted(list(payload.keys()))}"
+        )
         print(f"[SCHED] trigger workflow={workflow_id} exec={exec_id}")
         await execute_workflow(exec_id)
     except Exception as e:

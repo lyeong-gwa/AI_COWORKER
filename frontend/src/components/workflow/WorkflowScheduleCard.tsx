@@ -2,11 +2,11 @@
  * WorkflowScheduleCard
  *
  * Phase B — 워크플로우 스케줄러 설정 카드.
- * 토글 ON/OFF, 주기 선택(preset 7종 + 커스텀 cron), 즉시 실행, 저장.
+ * 토글 ON/OFF, 주기 선택(preset 7종 + 커스텀 cron), 트리거 입력값(payload), 즉시 실행, 저장.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { workflowApi } from '../../services/api';
-import type { WorkflowScheduleConfig } from '../../types';
+import type { WorkflowNodeInstance, WorkflowScheduleConfig } from '../../types';
 import { useToast } from '../common/Toast';
 
 // ─── preset 매핑 (D3) ────────────────────────────────────────────────────────
@@ -94,17 +94,87 @@ function ToggleSwitch({
   );
 }
 
+// ─── 트리거 입력값(payload) helpers ───────────────────────────────────────────
+
+interface FormStartField {
+  name: string;
+  label?: string;
+  type?: string;
+  default?: unknown;
+  required?: boolean;
+}
+
+/** triggerNode 가 form-start 이고 config.fields 가 비어있지 않으면 그 fields 반환. */
+export function detectFormStartFields(triggerNode: WorkflowNodeInstance | null | undefined): FormStartField[] {
+  if (!triggerNode) return [];
+  if ((triggerNode.definitionType || '').toLowerCase() !== 'form-start') return [];
+  const raw = (triggerNode.config as { fields?: unknown } | undefined)?.fields;
+  if (!Array.isArray(raw)) return [];
+  const out: FormStartField[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const f = item as Record<string, unknown>;
+    const name = typeof f.name === 'string' ? f.name : '';
+    if (!name) continue;
+    out.push({
+      name,
+      label: typeof f.label === 'string' ? f.label : undefined,
+      type: typeof f.type === 'string' ? f.type : 'string',
+      default: f.default,
+      required: !!f.required,
+    });
+  }
+  return out;
+}
+
+/** field value 를 input 표시용 문자열로 강제 변환. */
+function valueToInputString(v: unknown): string {
+  if (v === undefined || v === null) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return '';
+  }
+}
+
+/** field 의 type 에 맞춰 입력 문자열을 적절한 JS 값으로 파싱.
+ *  string  → string (빈 문자열도 유지)
+ *  number  → Number (NaN 이면 원문 string 보존)
+ *  boolean → "true"/"false"/"1"/"0" 인식, 외엔 string
+ *  기타    → string
+ */
+function parseInputValue(field: FormStartField, raw: string): unknown {
+  const t = (field.type || 'string').toLowerCase();
+  if (t === 'number') {
+    if (raw.trim() === '') return '';
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : raw;
+  }
+  if (t === 'boolean') {
+    const lower = raw.trim().toLowerCase();
+    if (lower === 'true' || lower === '1') return true;
+    if (lower === 'false' || lower === '0') return false;
+    return raw;
+  }
+  return raw;
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface WorkflowScheduleCardProps {
   workflowId: string;
   initialConfig: WorkflowScheduleConfig;
+  /** 첫 노드(트리거). form-start 의 fields 자동 감지에 사용. */
+  triggerNode?: WorkflowNodeInstance | null;
   onSaved?: () => void;
 }
 
 export function WorkflowScheduleCard({
   workflowId,
   initialConfig,
+  triggerNode,
   onSaved,
 }: WorkflowScheduleCardProps) {
   const { toast } = useToast();
@@ -119,6 +189,40 @@ export function WorkflowScheduleCard({
       : '',
   );
   const [timezone] = useState(initialConfig.timezone || 'Asia/Seoul');
+
+  // ── 트리거 입력값(payload) 상태 ────────────────────────────────────────────
+  const formFields = useMemo<FormStartField[]>(
+    () => detectFormStartFields(triggerNode ?? null),
+    [triggerNode],
+  );
+  const initialPayload = useMemo<Record<string, unknown>>(
+    () => (initialConfig.payload && typeof initialConfig.payload === 'object' ? initialConfig.payload : {}),
+    [initialConfig.payload],
+  );
+  // 폼 모드: 필드별 문자열 input 값 (저장 시 type 에 맞춰 변환)
+  const [fieldInputs, setFieldInputs] = useState<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const f of formFields) {
+      if (Object.prototype.hasOwnProperty.call(initialPayload, f.name)) {
+        out[f.name] = valueToInputString(initialPayload[f.name]);
+      } else {
+        out[f.name] = '';
+      }
+    }
+    return out;
+  });
+  // JSON 폴백 모드: 직접 JSON 텍스트 편집
+  const [jsonText, setJsonText] = useState<string>(() => {
+    if (formFields.length > 0) return '';
+    try {
+      return Object.keys(initialPayload).length > 0
+        ? JSON.stringify(initialPayload, null, 2)
+        : '{}';
+    } catch {
+      return '{}';
+    }
+  });
+  const [payloadError, setPayloadError] = useState<string | null>(null);
 
   const [nextRunTime, setNextRunTime] = useState<string | null>(null);
   const [nextRunLoading, setNextRunLoading] = useState(false);
@@ -147,18 +251,50 @@ export function WorkflowScheduleCard({
   const currentCron =
     presetValue === CUSTOM_VALUE ? customCron.trim() : presetValue;
 
+  // payload 조립 — 실패 시 setPayloadError + null 반환
+  const buildPayload = (): Record<string, unknown> | null => {
+    if (formFields.length > 0) {
+      const out: Record<string, unknown> = {};
+      for (const f of formFields) {
+        const raw = fieldInputs[f.name] ?? '';
+        // 빈 문자열은 payload 에 포함하지 않는다 — backend 가 form-start default 처리
+        if (raw === '') continue;
+        out[f.name] = parseInputValue(f, raw);
+      }
+      return out;
+    }
+    // JSON 폴백
+    const trimmed = jsonText.trim();
+    if (!trimmed) return {};
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        setPayloadError('JSON 객체 형태여야 합니다. 예: { "status": "신규" }');
+        return null;
+      }
+      return parsed as Record<string, unknown>;
+    } catch (e) {
+      setPayloadError(`JSON 파싱 실패: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  };
+
   const handleSave = async () => {
     if (!currentCron) {
       setCronError('cron 표현식을 입력하세요.');
       return;
     }
     setCronError(null);
+    setPayloadError(null);
+    const payload = buildPayload();
+    if (payload === null) return; // payload 에러는 buildPayload 가 setState
     setSaveLoading(true);
     try {
       const res = await workflowApi.updateSchedule(workflowId, {
         enabled,
         cronExpr: currentCron,
         timezone,
+        payload,
       });
       toast.success('스케줄이 저장되었습니다.');
       setNextRunTime(res.nextRunTime ?? null);
@@ -294,6 +430,80 @@ export function WorkflowScheduleCard({
             {cronError}
           </div>
         )}
+
+        {/* ── 트리거 입력값 (payload) ───────────────────────────────────────── */}
+        <div className="pt-1 border-t border-slate-800/80">
+          <div className="flex items-center justify-between mb-1.5 mt-3">
+            <label className="block text-[11px] font-mono tracking-wider uppercase text-slate-400">
+              트리거 입력값
+            </label>
+            <span className="text-[10px] font-mono text-slate-600">
+              {formFields.length > 0 ? `form-start · ${formFields.length} field${formFields.length > 1 ? 's' : ''}` : 'JSON'}
+            </span>
+          </div>
+
+          {formFields.length > 0 ? (
+            <div className="space-y-2.5">
+              {formFields.map((f) => {
+                const placeholder = f.default !== undefined && f.default !== null
+                  ? valueToInputString(f.default)
+                  : '';
+                return (
+                  <div key={f.name}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[11px] font-mono text-slate-400">
+                        {f.label || f.name}
+                        {f.required && <span className="text-rose-400 ml-1">*</span>}
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-600">
+                        {f.type || 'string'}
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      value={fieldInputs[f.name] ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setFieldInputs((prev) => ({ ...prev, [f.name]: v }));
+                        setPayloadError(null);
+                      }}
+                      placeholder={placeholder}
+                      disabled={saveLoading}
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:border-cyan-600/60 disabled:opacity-50 font-mono"
+                    />
+                  </div>
+                );
+              })}
+              <p className="text-[10px] text-slate-500 mt-1.5 font-mono leading-relaxed">
+                비워두면 트리거 노드의 default 값이 사용됩니다.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <textarea
+                value={jsonText}
+                onChange={(e) => {
+                  setJsonText(e.target.value);
+                  setPayloadError(null);
+                }}
+                rows={4}
+                disabled={saveLoading}
+                placeholder='{ "key": "value" }'
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-600/60 disabled:opacity-50"
+              />
+              <p className="text-[10px] text-slate-500 font-mono leading-relaxed">
+                트리거가 form-start 가 아닙니다. JSON 객체로 직접 입력하세요.
+                비우면 빈 객체로 전달됩니다.
+              </p>
+            </div>
+          )}
+
+          {payloadError && (
+            <div className="mt-2 rounded-lg border border-rose-700/50 bg-rose-950/30 px-3 py-2 text-xs text-rose-300">
+              {payloadError}
+            </div>
+          )}
+        </div>
 
         {/* Next run time */}
         <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-4 py-3">

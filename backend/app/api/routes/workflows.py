@@ -68,14 +68,20 @@ _DEFAULT_SCHEDULE_CONFIG = {
     "enabled": False,
     "cronExpr": "0 * * * *",
     "timezone": "Asia/Seoul",
+    "payload": {},
 }
 
 
 def _schedule_config_or_default(wf: Workflow) -> dict:
-    """schedule_config 가 None/누락이면 default 반환 (안전한 응답 직렬화용)."""
+    """schedule_config 가 None/누락이면 default 반환 (안전한 응답 직렬화용).
+
+    이미 dict 인 경우에도 payload 키가 없으면 빈 dict 로 보강해 응답 일관성 유지.
+    """
     cfg = getattr(wf, "schedule_config", None)
     if not isinstance(cfg, dict):
         return dict(_DEFAULT_SCHEDULE_CONFIG)
+    if "payload" not in cfg or not isinstance(cfg.get("payload"), dict):
+        cfg = {**cfg, "payload": {}}
     return cfg
 
 
@@ -404,10 +410,20 @@ async def update_workflow_schedule(
     # cron 표현식 유효성 검증 (활성/비활성 무관 — 잘못된 표현식 저장 방지)
     _validate_cron_expr(data.cronExpr, tz)
 
+    # payload 처리 규칙:
+    # - request 의 payload 가 None  → 기존 schedule_config.payload 보존 (없으면 {})
+    # - request 의 payload 가 dict  → 그대로 사용 (빈 dict 도 명시적 비움으로 인정)
+    existing_cfg = workflow.schedule_config if isinstance(workflow.schedule_config, dict) else {}
+    if data.payload is None:
+        new_payload = existing_cfg.get("payload") if isinstance(existing_cfg.get("payload"), dict) else {}
+    else:
+        new_payload = data.payload
+
     new_cfg = {
         "enabled": bool(data.enabled),
         "cronExpr": data.cronExpr.strip(),
         "timezone": tz,
+        "payload": new_payload,
     }
     workflow.schedule_config = new_cfg
     # JSON 컬럼 in-place 변경 트래킹 위해 flag 보장
@@ -449,6 +465,7 @@ async def update_workflow_schedule(
             "enabled": new_cfg["enabled"],
             "cronExpr": new_cfg["cronExpr"],
             "timezone": new_cfg["timezone"],
+            "payloadKeys": sorted(list(new_payload.keys())) if isinstance(new_payload, dict) else [],
         },
     )
 

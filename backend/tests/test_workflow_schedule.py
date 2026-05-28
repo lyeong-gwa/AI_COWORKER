@@ -8,6 +8,9 @@
 - T5: 잘못된 cron 표현식 → 422 (VALIDATION_ERROR/INVALID_CRON_EXPR)
 - T6: GET /workflows/{id} 응답에 scheduleConfig 포함
 - T7: next-run API 응답 형식
+- T8: PATCH 에 payload 포함 → DB 의 schedule_config.payload 갱신
+- T9: payload 없이 PATCH → 기존 payload 보존, 신규 워크플로우는 {} 유지
+- T10: scheduler.trigger_now → 인스턴스의 input_data 에 payload 병합
 
 TestClient 는 컨텍스트 매니저로 사용하여 lifespan(=scheduler 기동) 을 발동시킨다.
 """
@@ -85,6 +88,8 @@ def test_new_workflow_has_default_schedule_config():
         assert cfg.get("enabled") is False
         assert cfg.get("cronExpr") == "0 * * * *"
         assert cfg.get("timezone") == "Asia/Seoul"
+        # 트리거 입력값(payload) default 는 빈 dict
+        assert cfg.get("payload") == {}
     finally:
         _drop_wf(wf_id)
 
@@ -249,3 +254,228 @@ def test_next_run_404_for_missing_workflow():
     r = client.get(f"/api/v1/workflows/{ghost}/schedule/next-run")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "NOT_FOUND"
+
+
+# ── T8 / T9: payload PATCH 동작 ─────────────────────────────────────────────
+
+
+def test_patch_schedule_persists_payload():
+    """T8: PATCH 에 payload 포함 → DB 의 schedule_config.payload 에 저장된다."""
+    wf_id = _make_wf(WorkflowStatus.DRAFT)
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        r = client.patch(
+            f"/api/v1/workflows/{wf_id}/schedule",
+            json={
+                "enabled": False,
+                "cronExpr": "*/10 * * * *",
+                "payload": {"status": "신규", "limit": 50, "active": True},
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["scheduleConfig"]["payload"] == {
+            "status": "신규",
+            "limit": 50,
+            "active": True,
+        }
+
+        # DB 직접 검증
+        cfg = asyncio.run(_async_get_schedule_config(wf_id))
+        assert cfg is not None
+        assert cfg.get("payload") == {
+            "status": "신규",
+            "limit": 50,
+            "active": True,
+        }
+    finally:
+        _drop_wf(wf_id)
+
+
+def test_patch_schedule_without_payload_preserves_existing():
+    """T9: payload 키 없이 PATCH → 기존 payload 보존. 신규 wf 의 default 는 {}."""
+    wf_id = _make_wf(WorkflowStatus.DRAFT)
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+
+        # 1) 처음 PATCH — payload 없음 → 기존 default({})가 보존되어야 함
+        r1 = client.patch(
+            f"/api/v1/workflows/{wf_id}/schedule",
+            json={"enabled": False, "cronExpr": "*/10 * * * *"},
+        )
+        assert r1.status_code == 200, r1.text
+        assert r1.json()["scheduleConfig"]["payload"] == {}
+
+        # DB 검증 — 빈 dict 유지
+        cfg1 = asyncio.run(_async_get_schedule_config(wf_id))
+        assert cfg1.get("payload") == {}
+
+        # 2) payload 설정
+        r2 = client.patch(
+            f"/api/v1/workflows/{wf_id}/schedule",
+            json={
+                "enabled": False,
+                "cronExpr": "*/10 * * * *",
+                "payload": {"status": "신규"},
+            },
+        )
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["scheduleConfig"]["payload"] == {"status": "신규"}
+
+        # 3) payload 없이 다른 필드만 PATCH → 기존 payload 보존
+        r3 = client.patch(
+            f"/api/v1/workflows/{wf_id}/schedule",
+            json={"enabled": False, "cronExpr": "0 * * * *"},
+        )
+        assert r3.status_code == 200, r3.text
+        assert r3.json()["scheduleConfig"]["payload"] == {"status": "신규"}
+
+        cfg3 = asyncio.run(_async_get_schedule_config(wf_id))
+        assert cfg3.get("payload") == {"status": "신규"}
+        assert cfg3.get("cronExpr") == "0 * * * *"
+
+        # 4) 명시적으로 빈 dict → 비움
+        r4 = client.patch(
+            f"/api/v1/workflows/{wf_id}/schedule",
+            json={"enabled": False, "cronExpr": "0 * * * *", "payload": {}},
+        )
+        assert r4.status_code == 200, r4.text
+        assert r4.json()["scheduleConfig"]["payload"] == {}
+    finally:
+        _drop_wf(wf_id)
+
+
+# ── T10: scheduler 즉시 실행이 payload 를 input_data 에 병합 ────────────────
+
+
+def test_scheduler_run_includes_payload_in_input_data():
+    """T10: schedule_config.payload 가 trigger_now 실행 시 input_data 에 병합된다.
+
+    workflow_engine 의 노드 실행을 우회하기 위해 execute_workflow 를 모킹.
+    스케줄러는 WorkflowExecution 만 생성·커밋한 뒤 execute_workflow 를 호출하므로
+    DB 의 input_data 를 직접 조회해 검증.
+    """
+    from app.models.workflow import WorkflowExecution
+    from app.core import scheduler as scheduler_mod
+
+    wf_id = _make_wf(WorkflowStatus.ACTIVE)
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            # payload 저장
+            r = client.patch(
+                f"/api/v1/workflows/{wf_id}/schedule",
+                json={
+                    "enabled": False,  # cron job 자체 등록은 불필요
+                    "cronExpr": "*/10 * * * *",
+                    "payload": {"status": "신규", "_scheduled": "overwritten"},
+                },
+            )
+            assert r.status_code == 200, r.text
+
+            # execute_workflow 모킹 (호출만 패스)
+            calls: list[str] = []
+
+            async def _noop_execute(exec_id: str) -> None:
+                calls.append(exec_id)
+
+            # scheduler 모듈 안에서 from ..services.workflow_engine import execute_workflow
+            # 형태로 함수 내부 lazy import → 패치는 services.workflow_engine.execute_workflow 자체로.
+            import app.services.workflow_engine as engine_mod
+            original = engine_mod.execute_workflow
+            engine_mod.execute_workflow = _noop_execute  # type: ignore[assignment]
+            try:
+                # 즉시 실행 시뮬레이션
+                asyncio.run(scheduler_mod._run_workflow_job(wf_id))
+            finally:
+                engine_mod.execute_workflow = original  # type: ignore[assignment]
+
+            assert len(calls) == 1, f"execute_workflow 호출 1회 기대, got={calls}"
+            exec_id = calls[0]
+
+            # DB 의 WorkflowExecution.input_data 직접 조회
+            async def _fetch_input_data(eid: str) -> dict | None:
+                async with async_session_maker() as db:
+                    row = (
+                        await db.execute(
+                            select(WorkflowExecution).where(WorkflowExecution.id == eid)
+                        )
+                    ).scalar_one_or_none()
+                    return row.input_data if row else None
+
+            input_data = asyncio.run(_fetch_input_data(exec_id))
+            assert input_data is not None
+            # _scheduled 메타 키는 payload 의 동일 키에 의해 덮어써진다 (payload 우선)
+            assert input_data.get("status") == "신규"
+            assert input_data.get("_scheduled") == "overwritten"
+
+            # 정리 — 생성된 인스턴스 제거
+            async def _cleanup(eid: str) -> None:
+                async with async_session_maker() as db:
+                    row = (
+                        await db.execute(
+                            select(WorkflowExecution).where(WorkflowExecution.id == eid)
+                        )
+                    ).scalar_one_or_none()
+                    if row:
+                        await db.delete(row)
+                        await db.commit()
+            asyncio.run(_cleanup(exec_id))
+    finally:
+        _drop_wf(wf_id)
+
+
+def test_scheduler_run_without_payload_keeps_scheduled_marker():
+    """payload 가 비어 있으면 input_data 는 {'_scheduled': True} 만 가진다."""
+    from app.models.workflow import WorkflowExecution
+    from app.core import scheduler as scheduler_mod
+
+    wf_id = _make_wf(WorkflowStatus.ACTIVE)
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            r = client.patch(
+                f"/api/v1/workflows/{wf_id}/schedule",
+                json={"enabled": False, "cronExpr": "*/10 * * * *"},
+            )
+            assert r.status_code == 200, r.text
+
+            calls: list[str] = []
+
+            async def _noop_execute(exec_id: str) -> None:
+                calls.append(exec_id)
+
+            import app.services.workflow_engine as engine_mod
+            original = engine_mod.execute_workflow
+            engine_mod.execute_workflow = _noop_execute  # type: ignore[assignment]
+            try:
+                asyncio.run(scheduler_mod._run_workflow_job(wf_id))
+            finally:
+                engine_mod.execute_workflow = original  # type: ignore[assignment]
+
+            assert len(calls) == 1
+            exec_id = calls[0]
+
+            async def _fetch_input_data(eid: str) -> dict | None:
+                async with async_session_maker() as db:
+                    row = (
+                        await db.execute(
+                            select(WorkflowExecution).where(WorkflowExecution.id == eid)
+                        )
+                    ).scalar_one_or_none()
+                    return row.input_data if row else None
+
+            input_data = asyncio.run(_fetch_input_data(exec_id))
+            assert input_data == {"_scheduled": True}
+
+            async def _cleanup(eid: str) -> None:
+                async with async_session_maker() as db:
+                    row = (
+                        await db.execute(
+                            select(WorkflowExecution).where(WorkflowExecution.id == eid)
+                        )
+                    ).scalar_one_or_none()
+                    if row:
+                        await db.delete(row)
+                        await db.commit()
+            asyncio.run(_cleanup(exec_id))
+    finally:
+        _drop_wf(wf_id)

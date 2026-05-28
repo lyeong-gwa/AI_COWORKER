@@ -61,12 +61,14 @@ class Workflow(Base):
 
     # 스케줄러 설정 (UI 토글 + cron 표현식). 기존 schedule-trigger 노드 메커니즘과 병행.
     # default 는 비활성 + 매시 정각 (Asia/Seoul). enabled=true 일 때만 APScheduler 등록.
+    # payload: cron 실행 시 워크플로우의 트리거 입력값으로 전달되는 dict.
     schedule_config: Mapped[Dict[str, Any]] = mapped_column(
         JSON,
         default=lambda: {
             "enabled": False,
             "cronExpr": "0 * * * *",
             "timezone": "Asia/Seoul",
+            "payload": {},
         },
         nullable=False,
     )

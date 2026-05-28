@@ -107,7 +107,7 @@ async def init_db() -> None:
                 await conn.execute(
                     text(
                         "UPDATE workflows SET schedule_config = "
-                        "'{\"enabled\": false, \"cronExpr\": \"0 * * * *\", \"timezone\": \"Asia/Seoul\"}' "
+                        "'{\"enabled\": false, \"cronExpr\": \"0 * * * *\", \"timezone\": \"Asia/Seoul\", \"payload\": {}}' "
                         "WHERE schedule_config IS NULL"
                     )
                 )
@@ -117,12 +117,28 @@ async def init_db() -> None:
                 await conn.execute(
                     text(
                         "UPDATE workflows SET schedule_config = "
-                        "'{\"enabled\": false, \"cronExpr\": \"0 * * * *\", \"timezone\": \"Asia/Seoul\"}' "
+                        "'{\"enabled\": false, \"cronExpr\": \"0 * * * *\", \"timezone\": \"Asia/Seoul\", \"payload\": {}}' "
                         "WHERE schedule_config IS NULL"
                     )
                 )
         except Exception as e:
             print(f"[MIGRATE] workflows.schedule_config 마이그레이션 스킵: {e}")
+
+    # 마이그레이션 (2026-05-27 v2): schedule_config 에 payload 키 보강.
+    # 기존 row 의 schedule_config 가 dict 이지만 payload 키가 없으면 빈 dict 로 추가.
+    # SQLite 의 json_set 은 항상 키를 덮어쓰므로 json_extract 로 키 부재를 확인한 row 만 갱신.
+    async with engine.begin() as conn:
+        try:
+            await conn.execute(
+                text(
+                    "UPDATE workflows SET schedule_config = "
+                    "json_set(schedule_config, '$.payload', json('{}')) "
+                    "WHERE schedule_config IS NOT NULL "
+                    "AND json_extract(schedule_config, '$.payload') IS NULL"
+                )
+            )
+        except Exception as e:
+            print(f"[MIGRATE] schedule_config.payload 보강 스킵: {e}")
 
     # 마이그레이션 (2026-05-12): InstanceDB 파일시스템 재설계 — 구 SQLite 테이블 폐기.
     # 운영 잔재 1건이 있더라도 records 0건이므로 안전하게 drop.
