@@ -503,7 +503,7 @@ def test_knowledge_node_response_exposes_source_url(unique_suffix):
             config={
                 "searchField": "",
                 "services": ["codeeyes"],
-                "maxResults": 7,
+                "maxResults": 14,
             },
         )
 

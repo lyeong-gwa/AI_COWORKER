@@ -724,7 +724,7 @@ CATALOG: List[NodeCatalogEntry] = [
                 default=5,
                 description=(
                     "최대 반환 개수 (실제로 KNOWLEDGE_MIN_RESULTS=4 이상, "
-                    "KNOWLEDGE_MAX_RESULTS=7 이하로 클램프됨)"
+                    "KNOWLEDGE_MAX_RESULTS=14 이하로 클램프됨)"
                 ),
                 required=False,
             ),

@@ -466,7 +466,7 @@ def test_knowledge_node_handler_services_filter(unique_suffix):
             config={
                 "searchField": "",
                 "services": ["codeeyes"],
-                "maxResults": 7,
+                "maxResults": 14,
             },
         )
 

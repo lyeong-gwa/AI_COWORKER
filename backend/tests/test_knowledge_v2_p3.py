@@ -276,7 +276,7 @@ def test_g4_node_handler_filters_by_page_types(unique_suffix):
                 "searchField": "q",
                 "categories": ["codeeyes"],
                 "pageTypes": ["Summary"],
-                "maxResults": 7,
+                "maxResults": 14,
             },
             input_data={"q": "G4 페이지타입 필터"},
         )
@@ -318,7 +318,7 @@ def test_g5_node_handler_min_score_excludes_low(unique_suffix):
             config={
                 "searchField": "q",
                 "categories": ["codeeyes"],
-                "maxResults": 7,
+                "maxResults": 14,
                 "minScore": 0.99,
             },
             input_data={"q": "전혀 다른 토픽 무관 검색어 xyz123"},
