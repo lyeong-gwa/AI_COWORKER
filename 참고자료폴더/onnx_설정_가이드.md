@@ -10,7 +10,7 @@ Amazon 서버나 외부 API 없이 로컬 PC에서 모든 임베딩 작업을 �
 ### 1단계: 의존성 설치
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.log
 ```
 
 ### 2단계: ONNX 모델 설정

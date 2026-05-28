@@ -172,6 +172,7 @@ GET http://localhost:8002/api/v1/nodes/catalog
 8. **진행상황은 SSE 스트림**: `GET /warehouse/instances/{id}/stream`으로 `EventSource` 구독. SSE 연결 불가 시 `/warehouse/instances/{id}` 폴링으로 fallback.
 9. **노드별 timeout 존재**: ai-custom=600s, api-call=60s, knowledge=30s, 기본=300s. timeout 초과 시 노드 상태가 `failed`로 기록된다.
 10. **지식 웹 편집 허용** (2026-05-14): 지식 페이지(`/knowledge`)에서 카테고리/태그/제목/본문 인라인 편집·신규 등록·삭제 가능. 다른 재료(노드/API명세/워크플로우)는 CLI 전용 정책 유지. 지식은 ChromaDB 재임베딩이 PUT 시 자동 처리되므로 웹 편집 시 추가 조치 불필요.
+11. **첫 세팅 시 ONNX 모델 사전 확인**: clone 직후 세팅을 AI 가 진행할 때, ONNX 임베딩 모델(`backend/models/onnx/`)은 git 에 포함되지 않으므로 **세팅 자동 진행 전 반드시 사용자에게 "ONNX 모델이 준비되어 있습니까?"를 먼저 확인**한다. 미준비 시 진행을 중단하고 모델 확보 방법(사외망 다운로드 후 복사 / 사내 모델 저장소)을 사용자와 합의한 뒤 진행한다. (글로벌 `feedback_ask_before_workaround` 정책과 동일 취지)
 
 ---
 

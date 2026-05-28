@@ -20,7 +20,7 @@ python -m venv venv
 venv\Scripts\activate
 
 # 의존성 설치
-pip install -r requirements.txt
+pip install -r requirements.log
 ```
 
 ## 환경 설정
@@ -77,7 +77,7 @@ backend/
 │   ├── sandbox/          # 코드 샌드박스
 │   │   └── executor.py
 │   └── main.py           # FastAPI 앱
-├── requirements.txt
+├── requirements.log
 ├── .env.example
 └── README.md
 ```

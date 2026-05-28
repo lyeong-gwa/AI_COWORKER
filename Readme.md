@@ -17,11 +17,24 @@ cd AI_COWORKER
 cd backend
 python -m venv .venv
 . .venv/Scripts/activate                  # PowerShell: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements.log
 cp .env.example .env                      # LLM_PROVIDER, OPENAI_API_KEY 등 채움
 python scripts/wipe.py --confirm          # DB·ChromaDB 제로 스타트
 python -m uvicorn app.main:app --port 8002 --host 0.0.0.0 &
+```
 
+> **⚠️ AI(LLM CLI)가 세팅을 진행하는 경우 — 첫 세팅 시 필수 확인**
+>
+> ONNX 임베딩 모델(`backend/models/onnx/jhgan_ko-sroberta-multitask/model.onnx`, 약 442 MB)은 용량·보안 이유로 git 에 포함되지 않습니다. clone 본에는 해당 파일이 없습니다.
+>
+> **AI 는 세팅을 자동 진행하기 전에 반드시 사용자에게 "ONNX 모델이 준비되어 있습니까?"를 먼저 질문**하고 아래 흐름을 따릅니다:
+>
+> - **준비됨** → `backend/models/onnx/` 하위에 모델 폴더가 배치되었는지 확인한 뒤 진행
+> - **미준비** → 진행을 즉시 중단하고, 모델 확보 방법(사외망에서 다운로드 후 복사 / 사내 모델 저장소)을 사용자와 합의한 뒤 진행
+>
+> 모델 없이도 서버는 기동되지만, **지식 검색·인입·그래프 기능이 동작하지 않습니다.**
+
+```bash
 # 3. 프론트엔드 (다른 터미널)
 cd ../frontend
 npm install
@@ -265,7 +278,7 @@ python -m venv .venv
 source .venv/bin/activate
 
 # 3) 의존 설치
-pip install -r requirements.txt
+pip install -r requirements.log
 
 # 4) 환경변수
 cp .env.example .env       # 또는 직접 작성 (아래 §11-5 참고)
@@ -439,7 +452,7 @@ curl -X PATCH http://localhost:8002/api/v1/api-definitions/api-a52ec6a0 \
 1. **AI 업무도우미 repo 만 clone** (목업 API·정적분석 등 인접 폴더는 이식 대상 아님)
 2. 사외망 PC 에서 **ONNX 모델 미리 받음** → `backend/models/onnx/` 폴더 통째 복사 (또는 사내 모델 저장소 활용)
 3. (선택) 사외망에서 검증한 **ChromaDB 도 함께 복사** → `backend/data/chroma/`. 없으면 사내에서 신규 빌드
-4. `requirements.txt` 의존을 **사내 PyPI 미러**로 받거나 wheels 미리 챙김
+4. `requirements.log` 의존을 **사내 PyPI 미러**로 받거나 wheels 미리 챙김
 5. `.env` 의 LLM provider 를 **사내 LLM Gateway** (custom_api 핸들러) 또는 **CLI 핸들러** (계획 단계) 로 설정
 6. **`api-definitions` 의 모든 `urlTemplate` 을 사내 진짜 API URL 로 PATCH** (개발 시 목업 8001 자리에 진짜 사내 시스템 — §11-8)
 7. 워크플로 / 노드 / 지식 정의는 변경 없이 그대로 동작
@@ -482,7 +495,7 @@ AI 업무도우미/
 │   │   ├── enrich_wiki_links.py # 위키 교차참조 LLM 자동 삽입
 │   │   └── migrate_to_multi_service.py
 │   ├── tests/                   # 242 케이스
-│   └── requirements.txt
+│   └── requirements.log
 ├── frontend/
 │   ├── src/
 │   │   ├── pages/               # KnowledgeViewerPage, KnowledgeGraphPage, ...
