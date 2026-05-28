@@ -37,11 +37,27 @@ npm run dev -- --port 5174 --strictPort
 
 ## 1. 시스템 한 줄 요약
 
-> "사용자는 AI 비서(CLI)와 대화하며 업무를 자동화하는 **워크플로우**를 만들고, 웹 화면에서는 그 워크플로우를 **클릭 한 번으로 실행**하고 **결과를 확인**합니다."
+> "사용자는 **LLM CLI 와 자연어로 대화**해서 업무 자동화 **워크플로우**를 만들고, 웹 화면에서는 그 워크플로우를 **클릭 한 번으로 실행**하고 **결과를 확인**합니다."
 
-- **만드는 사람** : AI 비서(CLI). 업무 흐름을 듣고 워크플로우를 조립해 줍니다.
-- **쓰는 사람** : 현업 담당자. 웹 대시보드에서 버튼을 눌러 실행하고, 결과 보고서를 받습니다.
-- **자동화되는 것** : Jira/Confluence/메신저 조회, GitHub PR 코드리뷰, 문의 답변, 보고서 생성 같이 "자료 모아서 → AI가 가공 → 결과 정리"로 이어지는 업무들.
+- **만드는 주체** : **LLM CLI** (Claude Code, OpenCode 등 — 사용자 환경에 설치된 도구). 사용자 요구를 듣고 본 시스템의 REST API 를 호출해 워크플로우·재료를 조립.
+- **쓰는 사람** : 현업 담당자. 웹 대시보드(5174)에서 버튼을 눌러 실행하고, 결과 보고서를 받음.
+- **자동화되는 것** : Jira/Confluence/메신저 조회, GitHub PR 코드리뷰, 문의 답변, 보고서 생성 같이 "자료 모아서 → AI가 가공 → 결과 정리" 로 이어지는 업무들.
+
+### 1.1 자산 분류 — 코드와 함께 오는 것 vs 신규 환경에서 채워야 하는 것
+
+처음 git clone 한 환경은 **빈 시스템 (13 노드 + 빈 DB)** 으로 시작합니다.
+
+| 자산 | 어떻게 도착? | 신규 사용자 작업 |
+|---|---|---|
+| **13 범용 노드** (form-start, api-call, knowledge, ai-custom, sorter, unpacker, mapper, instance-db-insert/lookup, result, markdown-viewer, ai-api-router, schedule-trigger) | ✅ **코드와 함께 영구 기능화** (`backend/app/nodes/`) | 변경 불필요 |
+| **위키 스키마** (`_schema.yaml`) | ✅ commit 포함 | 필요 시 카테고리·서비스 enum 추가 |
+| **API 명세** | ❌ DB 저장 (gitignore) | **LLM CLI 에게 등록 요청** ("이 API 호출 등록해줘") |
+| **지식 문서** | ❌ DB·파일 저장 (gitignore) | **LLM CLI 에게 등록 요청** 또는 `data/knowledge-archive/` 에 .md 일괄 → 변환 |
+| **인스턴스DB 메타** | ❌ DB 저장 (gitignore) | **LLM CLI 에게 등록 요청** ("중복 차단용 DB 만들어줘") |
+| **워크플로우 정의** | ❌ DB 저장 (gitignore) | **LLM CLI 에게 자연어 요청** ("문의글 답변 자동화 만들어줘") |
+| **커스텀 AI 노드 (`ai-custom` 인스턴스)** | ❌ DB 저장 (gitignore) | 워크플로 조립 시 LLM CLI 가 함께 등록 |
+
+→ **사용자는 LLM CLI 와 대화만**. CLI 가 REST API 를 두드려 위 4가지를 채움.
 
 ---
 
@@ -310,32 +326,76 @@ npm run dev -- --port 5174 --strictPort
 
 ### 11-7. 첫 사용 시나리오 (제로 스타트 → 1 워크플로 실행)
 
+**역할 분담**:
+- **사용자**: LLM CLI 에게 자연어로 요청만
+- **LLM CLI**: 본 시스템의 REST API 를 두드려 재료·워크플로 등록·실행
+
+#### 1단계 — LLM CLI 준비 (Claude Code / OpenCode 등)
+
 ```bash
-# 1. 지식 등록 (선택)
-#  - 옵션 A: 웹 UI /knowledge 에서 + 신규
-#  - 옵션 B: archive 폴더에 .md 일괄 → 변환
-mkdir backend/data/knowledge-archive/내폴더
-cp 어디/*.md backend/data/knowledge-archive/내폴더/
+# 예: Claude Code 사용 시
+cd AI_COWORKER
+claude        # 또는 OpenCode 환경에서 동등 명령
+
+# CLI 가 본 폴더의 CLAUDE.md (5,174줄) 을 자동으로 읽고
+# 시스템의 역할·노드 카탈로그·REST API 패턴을 학습한 상태에서 시작
+```
+
+#### 2단계 — 사용자가 자연어 요청
+
+CLI 와의 대화 예시:
+
+```
+사용자:
+  "ITO 사내망의 문의글을 매 10분마다 가져와서, 소스코드검증 관련
+   지식을 기반으로 답변을 자동 생성하고, 이미 답변한 글은 스킵하는
+   워크플로 만들어줘."
+
+LLM CLI (내부 동작):
+  1. GET /api/v1/nodes/catalog                 # 사용 가능 노드 13종 확인
+  2. GET /api/v1/api-definitions                # 기존 API 명세 확인
+     → 신규 등록 필요하면 POST /api/v1/api-definitions
+  3. GET /api/v1/knowledge?service=codeeyes     # 지식 도메인 확인
+  4. GET /api/v1/instance-dbs                   # 중복 차단용 DB 확인
+     → 없으면 POST /api/v1/instance-dbs
+  5. POST /api/v1/workflows                     # 워크플로 조립·등록
+     (form-start → api-call → unpacker → sorter → knowledge → ai-custom
+      → instance-db-insert → markdown-viewer)
+  6. PATCH /api/v1/workflows/{id}/schedule      # 10분 cron + payload 설정
+  → 사용자에게 보고: "워크플로 wf-xxx 만들었고 10분마다 자동 실행 켰어요"
+```
+
+#### 3단계 — 사용자가 웹 UI 에서 결과 모니터링
+
+```
+http://localhost:5174/workflows
+  → 카드 클릭 → 실행 이력·결과·답변 markdown 확인
+```
+
+#### 미리 등록된 자원 활용 (있으면 LLM CLI 가 재사용)
+
+신규 등록 없이 LLM CLI 가 발견할 수 있는 자원:
+- `GET /api/v1/nodes/catalog` — 13 범용 노드 스펙
+- `GET /api/v1/api-definitions` — 등록된 API 명세
+- `GET /api/v1/knowledge/services` + `/knowledge` — 등록된 지식 도메인·페이지
+- `GET /api/v1/instance-dbs` — 등록된 인스턴스DB
+- `GET /api/v1/workflows` — 기존 워크플로 (참고용)
+
+#### 수동 등록도 가능 (CLI 없이 직접)
+
+급할 때 curl 로 직접 등록도 가능 (위 작업을 사용자가 직접 호출):
+
+```bash
+# 지식 일괄 변환
 curl -X POST http://localhost:8002/api/v1/knowledge/restore-from-archive \
   -H "Content-Type: application/json" \
   -d '{"archive_subpath":"내폴더","dry_run":false,"llm_enabled":true}'
 
-# 2. API 명세 등록 (CLI)
-curl -X POST http://localhost:8002/api/v1/api-definitions \
-  -H "Content-Type: application/json" \
-  -d '{"name":"my-api","method":"GET","urlTemplate":"https://...","parameters":[...]}'
-
-# 3. 워크플로 조립 (CLI — 13종 노드 카탈로그 활용)
-curl http://localhost:8002/api/v1/nodes/catalog        # 사용 가능 노드 확인
-curl -X POST http://localhost:8002/api/v1/workflows -d '{"nodes":[...], "connections":[...]}'
-
-# 4. 실행
+# 워크플로 실행 (UI 의 ▶ 버튼과 동일)
 curl -X POST http://localhost:8002/api/v1/workflows/{wf-id}/run
-#   → 응답: { "instanceId": "exec-...", "status": "queued" }
 
-# 5. 결과 확인
-curl http://localhost:8002/api/v1/warehouse/instances/exec-...
-# 또는 웹 UI 에서 실행 카드 ▶ 클릭 → 진행상황·결과 추적
+# 인스턴스 결과
+curl http://localhost:8002/api/v1/warehouse/instances/{exec-id}
 ```
 
 ### 11-8. 외부 API 의존 (워크플로의 api-call 노드 대상)
