@@ -202,6 +202,7 @@ export interface AINode {
     maxRetries: number;             // 최대 재시도 횟수
   };
 
+  isActive?: boolean;
   createdAt: string;
   updatedAt: string;
 }
