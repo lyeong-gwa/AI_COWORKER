@@ -1005,6 +1005,50 @@ async def delete_execution(
 
 
 @router.post(
+    "/{workflow_id}/validate-flow",
+    summary="워크플로우 데이터 흐름 사전 검증",
+    description=(
+        "실행 전에 워크플로우의 input_mapping 경로를 정적으로 분석하여 "
+        "null로 해석될 가능성이 있는 필드를 미리 식별한다. "
+        "``sampleInput`` 에 실제 트리거 입력을 전달하면 더 정확한 분석이 가능하다. "
+        "issues 목록이 비어 있으면 명백한 매핑 오류가 없는 것이다."
+    ),
+)
+async def validate_workflow_flow(
+    workflow_id: str,
+    body: dict = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """워크플로우 데이터 흐름 정적 분석 — 실행 없이 null 리스크 식별."""
+    from ...services.flow_validator import validate_workflow_data_flow
+
+    result = await db.execute(
+        select(Workflow)
+        .options(selectinload(Workflow.nodes), selectinload(Workflow.connections))
+        .where(Workflow.id == workflow_id)
+    )
+    workflow = result.scalar_one_or_none()
+    if not workflow:
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
+
+    sample_input = (body or {}).get("sampleInput") or {}
+    analysis = validate_workflow_data_flow(
+        workflow_nodes=workflow.nodes,
+        workflow_connections=workflow.connections,
+        sample_input=sample_input,
+    )
+
+    return {
+        "workflowId": workflow_id,
+        "workflowName": workflow.name,
+        **analysis,
+    }
+
+
+@router.post(
     "/{workflow_id}/executions/cleanup",
     summary="워크플로우 실행 기록 일괄 정리",
     description=(

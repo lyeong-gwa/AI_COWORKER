@@ -579,12 +579,18 @@ export default function WorkflowViewerPage() {
               {workflow.id}
             </span>
             <button
-              onClick={() => setRunModalOpen(true)}
-              disabled={!canRun}
+              onClick={() => {
+                if (triggerNode?.definitionType === 'api-start') {
+                  handleRun({});
+                } else {
+                  setRunModalOpen(true);
+                }
+              }}
+              disabled={!canRun || submitting}
               className="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-semibold transition-all shadow-lg shadow-sky-900/40 inline-flex items-center gap-2"
             >
               <span className="font-mono">▶</span>
-              실행하기
+              {submitting ? '실행 중...' : '실행하기'}
             </button>
           </div>
         </div>

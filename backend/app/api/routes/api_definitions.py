@@ -299,6 +299,91 @@ async def execute_api_definition(
         )
 
 
+@router.post(
+    "/{api_def_id}/probe",
+    summary="API 실행 + 응답 스키마 자동 저장 (워크플로우 작성 전 필수)",
+    description=(
+        "등록된 API 를 실제로 호출하고, 응답 JSON 구조를 분석하여 "
+        "input_mapping 에 사용 가능한 ``$.path`` 목록을 반환한다. "
+        "워크플로우 작성 전 반드시 이 엔드포인트를 호출하여 "
+        "실제 응답 구조를 확인한 후 input_mapping 경로를 결정한다. "
+        "분석 결과는 api_definitions.response_schema 에 자동 저장된다."
+    ),
+)
+async def probe_api_definition(
+    api_def_id: str,
+    inputData: dict = Body(default_factory=dict, embed=True),
+    db: AsyncSession = Depends(get_db),
+):
+    """API 실행 → 응답 구조 자동 추출 → response_schema 저장 → 매핑 경로 반환."""
+    result = await db.execute(
+        select(ApiDefinition).where(ApiDefinition.id == api_def_id)
+    )
+    api_def = result.scalar_one_or_none()
+    if not api_def:
+        raise NotFoundError(
+            "API 정의를 찾을 수 없습니다",
+            details={"apiDefinitionId": api_def_id},
+        )
+
+    import time
+    start_time = time.perf_counter()
+    logs: list[str] = []
+
+    config = {
+        "method": api_def.method,
+        "urlTemplate": api_def.url_template,
+        "headers": api_def.headers or {},
+        "bodyTemplate": api_def.body_template,
+        "authType": api_def.auth_type,
+        "authConfig": api_def.auth_config or {},
+    }
+
+    try:
+        api_result = await _execute_api_call(config, inputData, logs)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "mappablePaths": [],
+            "arrayGuide": [],
+            "responseSchema": {},
+        }
+
+    execution_time = (time.perf_counter() - start_time) * 1000
+
+    # 응답 구조 분석
+    fields: list[dict] = []
+    _analyze_json(api_result, fields)
+    response_schema = {
+        "fields": fields[:50],
+        "example": api_result if not isinstance(api_result, str) else {},
+    }
+
+    # response_schema DB에 저장
+    api_def.response_schema = response_schema
+    await db.commit()
+
+    # input_mapping 에 사용할 수 있는 $.path 목록 생성
+    mappable_paths = _extract_mapping_paths(api_result)
+    array_guide = _build_array_guide(api_result)
+
+    return {
+        "success": True,
+        "apiDefId": api_def_id,
+        "apiName": api_def.name,
+        "executionTimeMs": round(execution_time, 1),
+        "rawResponse": api_result,
+        "mappablePaths": mappable_paths,
+        "arrayGuide": array_guide,
+        "schemaUpdated": True,
+        "usage": (
+            "input_mapping 작성 시 mappablePaths 의 path 값을 그대로 사용하세요. "
+            "배열 필드는 unpacker 노드로 처리한 후 아이템 내 필드를 $.fieldName 으로 접근합니다."
+        ),
+    }
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def _analyze_json(data, fields: list, prefix: str = ""):
@@ -332,3 +417,99 @@ def _analyze_json(data, fields: list, prefix: str = ""):
                     "type": type_map.get(type_name, type_name),
                     "description": "",
                 })
+
+
+def _type_name(value) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "number"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def _safe_example(value, max_len: int = 80):
+    """직렬화 가능한 예시 값 반환 (배열/객체는 축약)."""
+    if isinstance(value, dict):
+        return {k: "..." for k in list(value.keys())[:3]}
+    if isinstance(value, list):
+        return f"[{len(value)} items]"
+    if isinstance(value, str) and len(value) > max_len:
+        return value[:max_len] + "..."
+    return value
+
+
+def _extract_mapping_paths(data, prefix: str = "$", depth: int = 0) -> list:
+    """JSON 응답에서 input_mapping에 직접 쓸 수 있는 $.path 목록 생성.
+
+    배열 항목은 첫 번째 아이템을 기준으로 인덱스($.arr.0.field) 경로도 포함한다.
+    """
+    if depth > 3:
+        return []
+
+    paths = []
+    if not isinstance(data, dict):
+        return paths
+
+    for k, v in data.items():
+        full = f"{prefix}.{k}"
+        entry = {
+            "path": full,
+            "type": _type_name(v),
+            "example": _safe_example(v),
+        }
+        paths.append(entry)
+
+        if isinstance(v, dict) and depth < 2:
+            paths.extend(_extract_mapping_paths(v, full, depth + 1))
+        elif isinstance(v, list) and len(v) > 0:
+            if isinstance(v[0], dict):
+                # 첫 아이템 경로 (.0.) 포함
+                for ik, iv in v[0].items():
+                    paths.append({
+                        "path": f"{full}.0.{ik}",
+                        "type": _type_name(iv),
+                        "example": _safe_example(iv),
+                        "note": f"배열 첫 항목 직접 접근. 반복 처리 시 unpacker(arrayField={k}) → 다운스트림에서 $.{ik}",
+                    })
+
+    return paths
+
+
+def _build_array_guide(data) -> list:
+    """배열 필드에 대한 unpacker 사용 가이드 생성."""
+    guide = []
+    if not isinstance(data, dict):
+        return guide
+
+    for k, v in data.items():
+        if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
+            item_fields = list(v[0].keys())
+            guide.append({
+                "arrayPath": f"$.{k}",
+                "arrayField": k,
+                "itemCount": len(v),
+                "itemFields": item_fields,
+                "unpackerConfig": {
+                    "arrayField": k,
+                },
+                "downstreamMapping": {
+                    f: f"$.{f}" for f in item_fields[:5]
+                },
+                "note": (
+                    f"unpacker 노드의 config.arrayField = '{k}' 으로 설정하면 "
+                    f"각 항목이 개별 실행됩니다. "
+                    f"다운스트림 노드에서 항목 필드는 $.{item_fields[0] if item_fields else 'field'} 형식으로 접근합니다."
+                ),
+            })
+
+    return guide

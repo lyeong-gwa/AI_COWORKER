@@ -784,6 +784,7 @@ export default function InstanceDetailPage() {
   const [previewContent, setPreviewContent] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
 
   const sseRef = useRef<EventSource | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1139,6 +1140,22 @@ export default function InstanceDetailPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [previewOpen]);
 
+  // ─── Cancel execution handler ─────────────────────────────────
+  const handleCancelExecution = useCallback(async () => {
+    if (!instanceId) return;
+    const confirmed = window.confirm('실행을 취소하시겠습니까? 현재 노드 완료 후 다음 노드부터 중단됩니다.');
+    if (!confirmed) return;
+    setCancelLoading(true);
+    try {
+      await workflowApi.cancelExecution(instanceId);
+      toast.success('취소 요청이 전송되었습니다. 현재 노드 완료 후 중단됩니다.');
+    } catch (e) {
+      toast.error(`취소 실패: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCancelLoading(false);
+    }
+  }, [instanceId, toast]);
+
   // ─── Delete execution handler ────────────────────────────────
   const handleDeleteExecution = useCallback(async () => {
     if (!instanceId || !workflowId) return;
@@ -1278,6 +1295,16 @@ export default function InstanceDetailPage() {
                   📄 MD 보고서 다운로드
                 </a>
               </>
+            )}
+            {(instance.status === 'pending' || instance.status === 'running') && (
+              <button
+                onClick={handleCancelExecution}
+                disabled={cancelLoading}
+                title="실행 취소"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-700/60 bg-amber-950/30 text-xs font-mono text-amber-400/90 hover:text-amber-300 hover:border-amber-600 hover:bg-amber-950/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cancelLoading ? '취소 중...' : '⏹ 취소'}
+              </button>
             )}
             <button
               onClick={handleDeleteExecution}

@@ -138,6 +138,8 @@ GET http://localhost:8002/api/v1/nodes/catalog
 | GET | `/api/v1/nodes` | 커스텀 AI 노드 목록 |
 | GET | `/api/v1/knowledge` | 지식문서 목록·검색 |
 | GET | `/api/v1/api-definitions` | API 명세 목록 |
+| POST | `/api/v1/api-definitions/{id}/probe` | **API 실행 + 응답 스키마 자동 저장** → `mappablePaths` (input_mapping 경로 목록) + `arrayGuide` 반환 |
+| POST | `/api/v1/workflows/{id}/validate-flow` | 실행 전 데이터 흐름 정적 검증 → null 리스크 `issues` 목록 반환 |
 | GET | `/api/v1/dashboard/summary` | 대시보드 집계 — `{counts: {todayRuns, inProgress, failed, completed}, workflows: [{...latestInstance}]}` |
 
 ### 5.3 인스턴스DB CRUD (CLI 전용)
@@ -164,6 +166,9 @@ GET http://localhost:8002/api/v1/nodes/catalog
 
 1. **제로 스타트**: 빈 시스템에서 시작. 기존 DB/ChromaDB 초기화가 필요하면 `python scripts/wipe.py --confirm` 실행.
 2. **재료 먼저, 워크플로우 나중**: API 명세·지식문서·커스텀 AI 노드를 먼저 등록한 후 워크플로우를 조립한다.
+2a. **[필수] API probe 후 input_mapping 작성**: API 명세를 등록한 직후 반드시 `POST /api/v1/api-definitions/{id}/probe`를 호출하여 실제 응답 구조를 확인한다. 반환된 `mappablePaths`의 `path` 값만을 input_mapping에 사용한다. 추측으로 경로를 작성하는 것은 **절대 금지**. 배열 필드는 `arrayGuide`의 `unpackerConfig`와 `downstreamMapping`을 참고한다.
+2b. **[필수] 워크플로우 작성 전 검증**: `POST /api/v1/workflows/{id}/validate-flow`로 사전 검증 후 `issues`가 있으면 input_mapping을 수정한다.
+2c. **[필수] 실행 후 감사 보고서 확인**: 실행 완료 후 `GET /api/v1/warehouse/instances/{id}`의 `outputData._executionAudit`을 확인한다. `nodesWithNullInputs`가 있으면 해당 노드의 `nullWarnings`를 보고 input_mapping을 수정한다.
 3. **자동 지식화 금지**: 인스턴스 → 지식문서 이관은 사용자 검토 후 CLI 명시 요청으로만 수행. 실행 엔진이 자동 호출해서는 안 된다.
 4. **범용성 유지**: 도메인 특화 노드(`milestone-collector` 등) 신설 금지. 새 요구사항은 `ai-custom` + `api-call` 조합으로 충족한다. 인스턴스DB는 인프라 자원이므로 이 원칙과 무관.
 5. **실행 엔진 건드리지 않기**: `backend/app/services/workflow_engine.py`는 position 무관하게 안정적으로 동작한다. 수정하지 않는다.

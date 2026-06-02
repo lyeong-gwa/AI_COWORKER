@@ -69,6 +69,30 @@ class NodeTimeoutError(Exception):
         self.seconds = seconds
 
 
+class WorkflowCancelledError(Exception):
+    """사용자가 실행 취소 API를 호출하여 DB 상태가 CANCELLED로 변경된 경우."""
+    pass
+
+
+class NullMappedFieldError(Exception):
+    """input_mapping의 ``$.field`` 경로가 None으로 해석된 경우.
+
+    workflow.variables['strictNullCheck'] = true 일 때 노드 실행을 중단시킨다.
+    일반 모드에서는 ``nullWarnings`` 만 node_results 에 기록하고 실행을 계속한다.
+    """
+
+    def __init__(self, node_id: str, null_fields: list) -> None:
+        fields_str = ", ".join(
+            f"'{target}' (from '{src}')" for target, src in null_fields
+        )
+        super().__init__(
+            f"Node '{node_id}': 다음 입력 필드가 null입니다: {fields_str}. "
+            f"업스트림 노드 출력 또는 input_mapping 경로를 확인하세요."
+        )
+        self.node_id = node_id
+        self.null_fields = null_fields
+
+
 # Heartbeat emit 간격. 너무 짧으면 네트워크 부하, 너무 길면 끊김 감지 지연.
 # 프론트엔드가 연결 상태를 갱신하기에 충분한 30초로 고정.
 HEARTBEAT_INTERVAL_SECONDS: float = 30.0
@@ -133,6 +157,8 @@ class WorkflowEngine:
 
                 # 출력 노드 결과 수집
                 output_data = self._collect_outputs()
+                # 데이터 흐름 감사 보고서 첨부 (null 필드·오류 노드 추적용)
+                output_data["_executionAudit"] = self._generate_execution_audit()
                 self.execution.output_data = output_data
 
                 await db.commit()
@@ -144,6 +170,18 @@ class WorkflowEngine:
                         "status": ExecutionStatus.COMPLETED.value,
                         "outputData": output_data,
                     },
+                )
+
+            except WorkflowCancelledError:
+                # cancel API가 이미 status=CANCELLED를 DB에 기록했으므로
+                # completed_at 과 node_results 만 업데이트한다.
+                self.execution.completed_at = datetime.utcnow()
+                self.execution.node_results = self.node_results
+                await db.commit()
+
+                await self._emit_event(
+                    "execution_complete",
+                    data={"status": ExecutionStatus.CANCELLED.value},
                 )
 
             except Exception as e:
@@ -174,6 +212,15 @@ class WorkflowEngine:
                     except (asyncio.CancelledError, Exception):
                         # heartbeat 내부 예외는 실행 결과에 영향 없음.
                         pass
+
+    async def _check_cancelled(self, db: AsyncSession) -> None:
+        """DB에서 현재 실행 상태를 조회해 CANCELLED이면 WorkflowCancelledError를 발생시킨다."""
+        row = await db.execute(
+            select(WorkflowExecution.status).where(WorkflowExecution.id == self.execution_id)
+        )
+        current_status = row.scalar_one_or_none()
+        if current_status == ExecutionStatus.CANCELLED:
+            raise WorkflowCancelledError("사용자 요청으로 실행이 취소되었습니다.")
 
     async def _load_execution(self, db: AsyncSession) -> None:
         """실행 정보 로드"""
@@ -253,6 +300,7 @@ class WorkflowEngine:
 
             # 준비된 노드들 실행
             for node_id in ready_nodes:
+                await self._check_cancelled(db)
                 await self._execute_node(node_id, db)
                 self.completed_nodes.add(node_id)
 
@@ -367,6 +415,7 @@ class WorkflowEngine:
                 progress_made = True
                 chain_visited.add(nid)
                 self.completed_nodes.discard(nid)
+                await self._check_cancelled(db)
                 await self._execute_node(nid, db)
                 self.completed_nodes.add(nid)
 
@@ -423,8 +472,27 @@ class WorkflowEngine:
         try:
             # 입력 데이터 수집 (이전 노드들의 벨트 데이터 병합)
             belt_input = self._collect_belt_input(node_id)
-            input_data = self._resolve_input_mapping(node_id, belt_input)
+            input_data, null_fields = self._resolve_input_mapping(node_id, belt_input)
             node_result["inputData"] = input_data
+            # 입력 경로 추적 (감사·디버깅용)
+            node_result["inputTrace"] = {
+                "availableBeltKeys": [k for k in belt_input if not k.startswith("_")],
+                "appliedMapping": node.input_mapping or {},
+            }
+            if null_fields:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "노드 '%s' (%s): null 입력 필드 감지 — %s",
+                    node_id,
+                    node.definition_type,
+                    null_fields,
+                )
+                node_result["nullWarnings"] = [
+                    {"field": target, "source": src} for target, src in null_fields
+                ]
+                # strictNullCheck 모드: null 필드 감지 즉시 실행 중단
+                if (self.workflow.variables or {}).get("strictNullCheck") is True:
+                    raise NullMappedFieldError(node_id, null_fields)
 
             # 노드 타입별 실행
             output = await self._execute_by_type(node, input_data, db)
@@ -506,15 +574,25 @@ class WorkflowEngine:
             merged.update(own_output)
         return merged
 
-    def _resolve_input_mapping(self, node_id: str, belt_input: Dict[str, Any]) -> Dict[str, Any]:
-        """input_mapping의 $.field 표현식을 벨트 데이터에서 해석"""
+    def _resolve_input_mapping(self, node_id: str, belt_input: Dict[str, Any]) -> tuple:
+        """input_mapping의 $.field 표현식을 벨트 데이터에서 해석.
+
+        Returns
+        -------
+        (resolved_data, null_fields)
+            resolved_data : 해석된 입력 dict
+            null_fields   : None으로 해석된 필드 목록 [(target_key, source_expr), ...]
+                            input_mapping 경로가 잘못됐거나 업스트림 노드 출력에 해당 키가
+                            없는 경우에 발생한다.
+        """
         node = self.nodes_by_id[node_id]
         mapping = node.input_mapping
 
         if not mapping:
-            return belt_input
+            return belt_input, []
 
         resolved = {}
+        null_fields = []
         for target_key, source_expr in mapping.items():
             if isinstance(source_expr, str) and source_expr.startswith(FIELD_MAPPING_PREFIX):
                 path = source_expr[len(FIELD_MAPPING_PREFIX):]  # "$." 제거
@@ -523,14 +601,24 @@ class WorkflowEngine:
                 for key in path.split("."):
                     if isinstance(value, dict):
                         value = value.get(key)
+                    elif isinstance(value, list):
+                        # 숫자 키면 배열 인덱스 접근 (예: $.data.0.id)
+                        try:
+                            value = value[int(key)]
+                        except (ValueError, IndexError):
+                            value = None
+                            break
                     else:
                         value = None
                         break
+                if value is None:
+                    # 경로 해석 실패 → null 필드로 기록
+                    null_fields.append((target_key, source_expr))
                 resolved[target_key] = value
             else:
                 resolved[target_key] = source_expr
 
-        return resolved
+        return resolved, null_fields
 
     async def _execute_by_type(
         self,
@@ -607,6 +695,78 @@ class WorkflowEngine:
                     outputs[leaf_id] = self.node_results[leaf_id].get("outputData")
 
         return outputs
+
+    def _generate_execution_audit(self) -> Dict[str, Any]:
+        """전체 실행의 데이터 흐름 감사 보고서 생성.
+
+        완료 직후 호출되며 결과는 execution.output_data['_executionAudit'] 에 저장된다.
+        null 입력 필드가 있는 노드를 강조하여 CLI·웹 UI 에서 원인 파악에 활용한다.
+        """
+        nodes_with_null: list = []
+        nodes_with_errors: list = []
+        data_flow: list = []
+
+        for node_id in list(self.node_results):
+            result = self.node_results[node_id]
+            node = self.nodes_by_id.get(node_id)
+            if not node:
+                continue
+
+            entry: Dict[str, Any] = {
+                "nodeId": node_id,
+                "nodeName": node.name or node_id,
+                "definitionType": node.definition_type,
+                "status": result.get("status"),
+            }
+
+            # 입력 키 목록 (private 키 제외)
+            input_data = result.get("inputData")
+            entry["inputKeys"] = (
+                sorted(k for k in input_data if not k.startswith("_"))
+                if isinstance(input_data, dict)
+                else []
+            )
+
+            # null 경고 수집
+            null_warnings = result.get("nullWarnings")
+            if null_warnings:
+                entry["nullWarnings"] = null_warnings
+                nodes_with_null.append({
+                    "nodeId": node_id,
+                    "nodeName": node.name or node_id,
+                    "definitionType": node.definition_type,
+                    "nullFields": null_warnings,
+                })
+
+            # 오류 수집
+            if result.get("status") == "failed":
+                nodes_with_errors.append({
+                    "nodeId": node_id,
+                    "nodeName": node.name or node_id,
+                    "error": result.get("error"),
+                })
+
+            data_flow.append(entry)
+
+        # 권장 조치 (상위 5개)
+        recommendations: list = []
+        for n in nodes_with_null[:5]:
+            for nf in n["nullFields"]:
+                recommendations.append(
+                    f"노드 '{n['nodeName']}': '{nf['field']}' 필드({nf['source']})가 null — "
+                    f"업스트림 노드 출력 구조와 input_mapping 경로를 확인하세요"
+                )
+
+        return {
+            "totalNodes": len(data_flow),
+            "completedNodes": sum(1 for e in data_flow if e.get("status") == "completed"),
+            "failedNodes": len(nodes_with_errors),
+            "nodesWithNullInputs": nodes_with_null,
+            "nodesWithErrors": nodes_with_errors,
+            "dataFlow": data_flow,
+            "hasIssues": bool(nodes_with_null or nodes_with_errors),
+            "recommendations": recommendations,
+        }
 
     def _get_nested_value(self, data: Dict, path: str) -> Any:
         """중첩 경로로 값 가져오기"""
