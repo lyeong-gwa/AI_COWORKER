@@ -57,6 +57,17 @@ export interface NodeInspectorDrawerProps {
   instance?: NodeInspectorInstanceContext;
   /** 닫기 콜백 (ESC, X 버튼, pane click 모두 동일 콜백 사용) */
   onClose: () => void;
+  /**
+   * 인라인 노드 재료 편집 활성화 여부.
+   * - true: WorkflowViewerPage — 드롭다운으로 참조 재료를 변경 가능
+   * - false/undefined: InstanceDetailPage — read-only 유지
+   */
+  editable?: boolean;
+  /**
+   * 재료 변경 후 워크플로우를 새로고침하는 콜백.
+   * editable=true 일 때 PATCH 성공 시 호출됨.
+   */
+  onWorkflowUpdated?: (updated: Workflow) => void;
 }
 
 type ActiveTab = 'info' | 'data' | 'run';
@@ -92,6 +103,8 @@ export function NodeInspectorDrawer({
   pageContext = 'viewer',
   instance,
   onClose,
+  editable = false,
+  onWorkflowUpdated,
 }: NodeInspectorDrawerProps) {
   const [activeTab, setActiveTab] = useState<ActiveTab>('info');
 
@@ -207,6 +220,8 @@ export function NodeInspectorDrawer({
             workflow={workflow}
             catalog={catalogEntry}
             warehouseTotalCache={warehouseTotalCache}
+            editable={editable}
+            onWorkflowUpdated={onWorkflowUpdated}
           />
         )}
         {activeTab === 'data' && dataTabEnabled && (

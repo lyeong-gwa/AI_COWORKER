@@ -955,6 +955,8 @@ export default function WorkflowViewerPage() {
                 workflow={workflow}
                 catalog={catalog}
                 onClose={() => setSelectedNode(null)}
+                editable={true}
+                onWorkflowUpdated={(updated) => setWorkflow(updated)}
               />
             </ReactFlowProvider>
           </AINodesContext.Provider>

@@ -1338,11 +1338,12 @@ async def generate_workflow(
                 )
 
         action_word = "수정" if is_refine_mode else "생성"
+        save_button_label = "'변경 저장'" if is_refine_mode else "'저장'"
         if validation["valid"]:
             assistant_message = (
-                f"워크플로우 '{draft.get('name', '이름 없음')}'이(가) 성공적으로 {action_word}되었습니다. "
+                f"워크플로우 '{draft.get('name', '이름 없음')}'이(가) {action_word}되었습니다. "
                 f"노드 {len(draft.get('nodes', []))}개, 연결 {len(draft.get('connections', []))}개. "
-                f"검토 후 저장하려면 POST /api/v1/workflows를 호출하세요."
+                f"검토 후 {save_button_label} 버튼을 눌러 저장하세요."
             )
             if missing_material_notes:
                 assistant_message += " 참고: " + " / ".join(missing_material_notes)

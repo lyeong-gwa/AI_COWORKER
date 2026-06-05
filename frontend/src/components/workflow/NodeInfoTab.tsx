@@ -13,7 +13,7 @@
  *   7. UseCases
  *   8. ConnectsWellWith
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Node } from '@xyflow/react';
 import type { Workflow, ApiDefinition, AINode, InstanceDB } from '../../types';
 import {
@@ -22,12 +22,14 @@ import {
   instanceDbApi,
   factoryApi,
   knowledgeApi,
+  workflowApi,
   type NodeCatalogEntry,
   type NodeCatalogIOField,
   type NodeCatalogConfigField,
 } from '../../services/api';
 import { JsonTreeView } from '../common/JsonTreeView';
 import { nodeRegistry } from '../../nodes';
+import { useToast } from '../common/Toast';
 
 // 카테고리 배지 색상 매핑
 const CATEGORY_COLORS: Record<string, string> = {
@@ -49,9 +51,18 @@ interface NodeInfoTabProps {
    * MapperExtra / WarehouseCountExtra 가 이 캐시를 먼저 확인해 limit=1 fetch 를 생략한다.
    */
   warehouseTotalCache?: ReadonlyMap<string, number>;
+  /**
+   * 인라인 노드 재료 편집 활성화 여부.
+   * WorkflowViewerPage 에서 true, InstanceDetailPage 에서 false (기본).
+   */
+  editable?: boolean;
+  /**
+   * 재료 변경 후 워크플로우를 새로고침하는 콜백.
+   */
+  onWorkflowUpdated?: (updated: Workflow) => void;
 }
 
-export function NodeInfoTab({ node, workflow, catalog, warehouseTotalCache }: NodeInfoTabProps) {
+export function NodeInfoTab({ node, workflow, catalog, warehouseTotalCache, editable = false, onWorkflowUpdated }: NodeInfoTabProps) {
   const inst = workflow.nodes.find((n) => n.id === node.id);
   const rawDefType = inst?.definitionType ?? (node.data?.definitionType as string | undefined) ?? '';
   const defType = LEGACY_DEF_TYPE_MAP[rawDefType] ?? rawDefType;
@@ -178,6 +189,8 @@ export function NodeInfoTab({ node, workflow, catalog, warehouseTotalCache }: No
                 nodeInstanceId={node.id}
                 catalog={catalog}
                 warehouseTotalCache={warehouseTotalCache}
+                editable={editable}
+                onWorkflowUpdated={onWorkflowUpdated}
               />
 
               {/* 섹션 7 — UseCases */}
@@ -398,6 +411,90 @@ function ConfigSpecTable({ fields }: { fields: NodeCatalogConfigField[] }) {
   );
 }
 
+// ─── §6 Material Edit Dropdown (editable=true 전용) ─────────────────────
+
+interface MaterialEditDropdownProps {
+  /** 현재 저장된 ID (config 에서 읽은 값) */
+  currentId: string;
+  /** 드롭다운에서 선택 중인 ID */
+  selectedId: string;
+  onSelect: (id: string) => void;
+  saving: boolean;
+  onApply: () => void;
+  listLoading: boolean;
+  /** 드롭다운 옵션 목록 */
+  options: Array<{ id: string; label: string; sub?: string }>;
+  /** 현재 값의 표시 레이블 (목록에 없을 때 폴백) */
+  currentLabel: string;
+}
+
+function MaterialEditDropdown({
+  currentId,
+  selectedId,
+  onSelect,
+  saving,
+  onApply,
+  listLoading,
+  options,
+  currentLabel,
+}: MaterialEditDropdownProps) {
+  // 현재 값이 목록에 없으면 추가 (현재 값 항상 표시)
+  const hasCurrentInOptions = options.some((o) => o.id === currentId);
+  const augmentedOptions = hasCurrentInOptions || !currentId
+    ? options
+    : [{ id: currentId, label: currentLabel, sub: '(현재 값)' }, ...options];
+
+  const isDirty = selectedId !== currentId;
+
+  return (
+    <div className="mb-3 rounded-md border border-sky-800/50 bg-sky-950/20 p-3 space-y-2.5">
+      <div className="text-[10px] font-semibold text-sky-300 uppercase tracking-wider">
+        재료 변경
+      </div>
+      <div className="flex gap-2 items-start">
+        <div className="flex-1 min-w-0">
+          {listLoading ? (
+            <div className="text-[11px] text-slate-500 italic">목록 불러오는 중…</div>
+          ) : (
+            <select
+              value={selectedId}
+              onChange={(e) => onSelect(e.target.value)}
+              disabled={saving}
+              className="w-full px-2 py-1.5 rounded bg-slate-900 border border-slate-700 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-sky-600 disabled:opacity-50"
+            >
+              {augmentedOptions.length === 0 && (
+                <option value="">등록된 재료가 없습니다</option>
+              )}
+              {augmentedOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}{o.sub ? ` — ${o.sub}` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <button
+          onClick={onApply}
+          disabled={saving || !isDirty || listLoading}
+          className="flex-shrink-0 px-3 py-1.5 rounded bg-sky-700 hover:bg-sky-600 disabled:bg-slate-800 disabled:text-slate-600 text-white text-[11px] font-medium transition-colors inline-flex items-center gap-1"
+        >
+          {saving ? (
+            <>
+              <span className="w-3 h-3 border border-white/40 border-t-white rounded-full animate-spin inline-block" />
+              저장 중
+            </>
+          ) : (
+            '변경 적용'
+          )}
+        </button>
+      </div>
+      <p className="text-[10px] text-sky-400/60 italic">
+        변경 시 자동으로 해당 명세를 재동결(스냅샷)합니다.
+      </p>
+    </div>
+  );
+}
+
 // ─── §6 Extra info — Phase 1c ────────────────────────────────────────────
 
 interface ExtraInfoProps {
@@ -408,6 +505,10 @@ interface ExtraInfoProps {
   catalog: NodeCatalogEntry;
   /** [P-6] 데이터 탭 warehouse fetch 결과 캐시 — 있으면 limit=1 추가 fetch 생략 */
   warehouseTotalCache?: ReadonlyMap<string, number>;
+  /** 인라인 재료 편집 활성화 여부 */
+  editable?: boolean;
+  /** 재료 변경 PATCH 성공 후 워크플로우 갱신 콜백 */
+  onWorkflowUpdated?: (updated: Workflow) => void;
 }
 
 function NodeExtraInfoSection(props: ExtraInfoProps) {
@@ -441,6 +542,66 @@ function NodeExtraInfoSection(props: ExtraInfoProps) {
   }
 }
 
+// ─── §6 Material Edit Hook ────────────────────────────────────────────────────
+
+/**
+ * 재료 변경 PATCH 를 처리하는 로컬 훅.
+ * refKey: 변경할 config 키 (e.g. 'apiDefinitionId')
+ * extraKeys: config 외에 노드 최상위에도 기록할 키 (e.g. 'aiNodeId')
+ */
+function useMaterialEdit(
+  workflow: Workflow,
+  nodeInstanceId: string,
+  refKey: string,
+  currentValue: string,
+  extraTopLevelKeys: string[] = [],
+  onWorkflowUpdated?: (updated: Workflow) => void,
+) {
+  const { toast } = useToast();
+  const [selectedId, setSelectedId] = useState(currentValue);
+  const [saving, setSaving] = useState(false);
+
+  // currentValue が変わったとき (e.g. 親が rerender) に同期
+  const prevValueRef = useRef(currentValue);
+  if (prevValueRef.current !== currentValue) {
+    prevValueRef.current = currentValue;
+    setSelectedId(currentValue);
+  }
+
+  const handleApply = async () => {
+    if (selectedId === currentValue) return;
+    setSaving(true);
+    try {
+      // deep-copy nodes, update the target node's config ref key
+      const updatedNodes = workflow.nodes.map((n) => {
+        if (n.id !== nodeInstanceId) return n;
+        const newConfig = { ...(n.config ?? {}), [refKey]: selectedId };
+        const base: typeof n = { ...n, config: newConfig };
+        // ai-custom: also mirror to top-level aiNodeId if requested
+        for (const topKey of extraTopLevelKeys) {
+          (base as any)[topKey] = selectedId;
+        }
+        return base;
+      });
+
+      const updated = await workflowApi.update(workflow.id, {
+        nodes: updatedNodes as any,
+        connections: workflow.connections as any,
+      });
+
+      toast.success('재료가 변경되었습니다. 스냅샷이 자동 갱신됩니다.');
+      onWorkflowUpdated?.(updated);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`변경 실패: ${msg}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return { selectedId, setSelectedId, saving, handleApply };
+}
+
 // ─── §6 Generic loading/error ────────────────────────────────────────────
 
 function ExtraLoading() {
@@ -467,12 +628,26 @@ function ExtraEmpty({ message }: { message: string }) {
 
 // ─── §6 api-call / api-start ─────────────────────────────────────────────
 
-function ApiDefinitionExtra({ config }: ExtraInfoProps) {
+function ApiDefinitionExtra({ config, workflow, nodeInstanceId, editable, onWorkflowUpdated }: ExtraInfoProps) {
   const apiId = (config.apiDefinitionId as string | undefined) ?? '';
   const [data, setData] = useState<ApiDefinition | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+
+  // 드롭다운용 전체 목록
+  const [allDefs, setAllDefs] = useState<ApiDefinition[]>([]);
+  const [listLoading, setListLoading] = useState(false);
+
+  const { selectedId, setSelectedId, saving, handleApply } = useMaterialEdit(
+    workflow, nodeInstanceId, 'apiDefinitionId', apiId, [], onWorkflowUpdated,
+  );
+
+  useEffect(() => {
+    if (!editable) return;
+    setListLoading(true);
+    apiDefinitionApi.list().then(setAllDefs).catch(() => setAllDefs([])).finally(() => setListLoading(false));
+  }, [editable]);
 
   useEffect(() => {
     if (!apiId) {
@@ -507,6 +682,22 @@ function ApiDefinitionExtra({ config }: ExtraInfoProps) {
 
   return (
     <Section title="추가 정보 — API 명세">
+      {editable && (
+        <MaterialEditDropdown
+          currentId={apiId}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          saving={saving}
+          onApply={handleApply}
+          listLoading={listLoading}
+          options={allDefs.map((d) => ({
+            id: d.id,
+            label: `[${d.method}] ${d.name}`,
+            sub: d.urlTemplate,
+          }))}
+          currentLabel={data ? `[${data.method}] ${data.name}` : apiId}
+        />
+      )}
       {!apiId ? (
         <ExtraEmpty message="API 명세 미연결 — config.apiDefinitionId 가 비어있습니다. CLI 로 설정하세요." />
       ) : loading ? (
@@ -644,14 +835,29 @@ function AiApiRouterExtra({ config }: ExtraInfoProps) {
 
 // ─── §6 ai-custom ────────────────────────────────────────────────────────
 
-function AiCustomExtra({ config }: ExtraInfoProps) {
-  const aiNodeId = (config.ai_node_id as string | undefined) ?? '';
+function AiCustomExtra({ config, workflow, nodeInstanceId, editable, onWorkflowUpdated }: ExtraInfoProps) {
+  // ai-custom uses ai_node_id in config; top-level aiNodeId may also be present
+  const aiNodeId = (config.ai_node_id as string | undefined) ?? (config.aiNodeId as string | undefined) ?? '';
   const [data, setData] = useState<AINode | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
   const [systemPromptOpen, setSystemPromptOpen] = useState(false);
   const [userPromptOpen, setUserPromptOpen] = useState(false);
+
+  // 드롭다운용 전체 목록
+  const [allNodes, setAllNodes] = useState<AINode[]>([]);
+  const [listLoading, setListLoading] = useState(false);
+
+  const { selectedId, setSelectedId, saving, handleApply } = useMaterialEdit(
+    workflow, nodeInstanceId, 'ai_node_id', aiNodeId, ['aiNodeId'], onWorkflowUpdated,
+  );
+
+  useEffect(() => {
+    if (!editable) return;
+    setListLoading(true);
+    nodeApi.list().then(setAllNodes).catch(() => setAllNodes([])).finally(() => setListLoading(false));
+  }, [editable]);
 
   useEffect(() => {
     if (!aiNodeId) {
@@ -684,6 +890,22 @@ function AiCustomExtra({ config }: ExtraInfoProps) {
 
   return (
     <Section title="추가 정보 — AI 노드">
+      {editable && (
+        <MaterialEditDropdown
+          currentId={aiNodeId}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          saving={saving}
+          onApply={handleApply}
+          listLoading={listLoading}
+          options={allNodes.map((n) => ({
+            id: n.id,
+            label: `${n.icon || ''} ${n.name}`.trim(),
+            sub: n.description ?? '',
+          }))}
+          currentLabel={data ? `${data.icon || ''} ${data.name}`.trim() : aiNodeId}
+        />
+      )}
       {!aiNodeId ? (
         <ExtraEmpty message="ai_node_id 가 설정되어 있지 않습니다." />
       ) : loading ? (
@@ -788,13 +1010,27 @@ function AiCustomExtra({ config }: ExtraInfoProps) {
 
 // ─── §6 instance-db-insert / instance-db-lookup ──────────────────────────
 
-function InstanceDbExtra({ config }: ExtraInfoProps) {
+function InstanceDbExtra({ config, workflow, nodeInstanceId, editable, onWorkflowUpdated }: ExtraInfoProps) {
   const instanceDbId = (config.instanceDbId as string | undefined) ?? '';
   const [data, setData] = useState<InstanceDB | null>(null);
   const [recordCount, setRecordCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+
+  // 드롭다운용 전체 목록
+  const [allDbs, setAllDbs] = useState<InstanceDB[]>([]);
+  const [listLoading, setListLoading] = useState(false);
+
+  const { selectedId, setSelectedId, saving, handleApply } = useMaterialEdit(
+    workflow, nodeInstanceId, 'instanceDbId', instanceDbId, [], onWorkflowUpdated,
+  );
+
+  useEffect(() => {
+    if (!editable) return;
+    setListLoading(true);
+    instanceDbApi.list().then(setAllDbs).catch(() => setAllDbs([])).finally(() => setListLoading(false));
+  }, [editable]);
 
   useEffect(() => {
     if (!instanceDbId) {
@@ -831,6 +1067,22 @@ function InstanceDbExtra({ config }: ExtraInfoProps) {
 
   return (
     <Section title="추가 정보 — 인스턴스DB">
+      {editable && (
+        <MaterialEditDropdown
+          currentId={instanceDbId}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          saving={saving}
+          onApply={handleApply}
+          listLoading={listLoading}
+          options={allDbs.map((d) => ({
+            id: d.id,
+            label: d.name,
+            sub: d.description ?? '',
+          }))}
+          currentLabel={data?.name ?? instanceDbId}
+        />
+      )}
       {!instanceDbId ? (
         <ExtraEmpty message="instanceDbId 가 설정되어 있지 않습니다." />
       ) : loading ? (
