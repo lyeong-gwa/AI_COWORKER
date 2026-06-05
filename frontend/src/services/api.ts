@@ -1443,24 +1443,28 @@ export const blueprintApi = {
     }),
 
   /** 재료값 채우기 — POST /blueprint/workflows/{id}/fill-materials */
-  fillMaterials: (
+  fillMaterials: async (
     id: string,
     values: Array<{ nodeRef: string; path: string; value: string }>,
-  ): Promise<Reconciliation> =>
-    request(`/blueprint/workflows/${id}/fill-materials`, {
-      method: 'POST',
-      body: JSON.stringify({ values }),
-    }),
+  ): Promise<Reconciliation> => {
+    const res = await request<{ workflowId: string; applied: unknown[]; skipped: unknown[]; reconciliation: Reconciliation }>(
+      `/blueprint/workflows/${id}/fill-materials`,
+      { method: 'POST', body: JSON.stringify({ values }) },
+    );
+    return res.reconciliation;
+  },
 
   /** 지식 카테고리 재매핑 — POST /blueprint/workflows/{id}/knowledge-remap */
-  knowledgeRemap: (
+  knowledgeRemap: async (
     id: string,
     remaps: Array<{ nodeRef: string; from: string; to: string }>,
-  ): Promise<Reconciliation> =>
-    request(`/blueprint/workflows/${id}/knowledge-remap`, {
-      method: 'POST',
-      body: JSON.stringify({ remaps }),
-    }),
+  ): Promise<Reconciliation> => {
+    const res = await request<{ workflowId: string; applied: unknown[]; skipped: unknown[]; reconciliation: Reconciliation }>(
+      `/blueprint/workflows/${id}/knowledge-remap`,
+      { method: 'POST', body: JSON.stringify({ remaps }) },
+    );
+    return res.reconciliation;
+  },
 };
 
 // Export error class

@@ -40,9 +40,10 @@ interface MaterialsProps {
   workflowId: string;
   items: ReconciliationMaterialToFill[];
   onUpdated: (rec: Reconciliation) => void;
+  readOnly?: boolean;
 }
 
-function MaterialsSection({ workflowId, items, onUpdated }: MaterialsProps) {
+function MaterialsSection({ workflowId, items, onUpdated, readOnly = false }: MaterialsProps) {
   const { toast } = useToast();
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -87,6 +88,41 @@ function MaterialsSection({ workflowId, items, onUpdated }: MaterialsProps) {
     return (
       <div className="rounded-lg border border-emerald-700/40 bg-emerald-950/20 px-4 py-3 text-xs text-emerald-400">
         모든 재료값이 입력되었습니다.
+      </div>
+    );
+  }
+
+  // Read-only mode: compact list, no inputs or save button
+  if (readOnly) {
+    return (
+      <div className="space-y-3">
+        {Array.from(grouped.entries()).map(([nodeRef, nodeItems]) => (
+          <div key={nodeRef} className="rounded-lg border border-slate-700/60 bg-slate-900/30">
+            <div className="px-4 py-2 border-b border-slate-700/40">
+              <span className="text-[11px] font-mono text-sky-400">{nodeRef}</span>
+            </div>
+            <div className="px-4 py-2.5 space-y-1.5">
+              {nodeItems.map((item) => {
+                const isSecret = item.kind === 'authSecret' || /secret|token|password|key/i.test(item.path);
+                return (
+                  <div key={key(item)} className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono text-slate-400">{item.path}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] border ${
+                      isSecret
+                        ? 'bg-amber-900/30 text-amber-400 border-amber-700/40'
+                        : 'bg-slate-800/60 text-slate-500 border-slate-700/40'
+                    }`}>
+                      {isSecret ? '인증' : '환경값'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        <p className="text-[11px] text-slate-600 italic">
+          가져오기 확정 후 입력할 수 있습니다.
+        </p>
       </div>
     );
   }
@@ -144,9 +180,10 @@ interface KnowledgeProps {
   workflowId: string;
   items: ReconciliationKnowledgeItem[];
   onUpdated: (rec: Reconciliation) => void;
+  readOnly?: boolean;
 }
 
-function KnowledgeSection({ workflowId, items, onUpdated }: KnowledgeProps) {
+function KnowledgeSection({ workflowId, items, onUpdated, readOnly = false }: KnowledgeProps) {
   const { toast } = useToast();
   const navigate = useNavigate();
   // remaps: nodeRef::from → chosen "to" category
@@ -209,8 +246,8 @@ function KnowledgeSection({ workflowId, items, onUpdated }: KnowledgeProps) {
             </div>
           )}
 
-          {/* Remap for missing categories */}
-          {item.status !== 'satisfied' && item.missingCategories.length > 0 && item.availableCategories.length > 0 && (
+          {/* Remap controls — hidden in read-only mode */}
+          {!readOnly && item.status !== 'satisfied' && item.missingCategories.length > 0 && item.availableCategories.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-2 items-center">
               {item.missingCategories.map((from) => {
                 const remapKey = `${item.nodeRef}::${from}`;
@@ -245,14 +282,21 @@ function KnowledgeSection({ workflowId, items, onUpdated }: KnowledgeProps) {
             </div>
           )}
 
-          {/* Link to knowledge page when missing and no available categories */}
-          {item.status === 'missing' && item.availableCategories.length === 0 && (
+          {/* Link to knowledge page — hidden in read-only mode */}
+          {!readOnly && item.status === 'missing' && item.availableCategories.length === 0 && (
             <button
               onClick={() => navigate('/knowledge')}
               className="mt-2 text-[11px] text-sky-400 hover:text-sky-300 underline underline-offset-2 transition-colors"
             >
               /knowledge 에서 문서 등록하기 →
             </button>
+          )}
+
+          {/* Read-only placeholder where actions would be */}
+          {readOnly && item.status !== 'satisfied' && (
+            <p className="mt-2 text-[11px] text-slate-600 italic">
+              확정 후 보정 가능
+            </p>
           )}
 
           {item.suggestedActions.length > 0 && (
@@ -296,6 +340,8 @@ interface ReconciliationPanelProps {
   onUpdated: (rec: Reconciliation) => void;
   /** 패널 헤더 표시 여부 (독립 페이지에서는 false로 사용 가능) */
   showHeader?: boolean;
+  /** 읽기 전용 모드 — 입력/버튼을 비활성화하고 미리보기 전용 뷰를 표시 */
+  readOnly?: boolean;
 }
 
 export function ReconciliationPanel({
@@ -303,7 +349,16 @@ export function ReconciliationPanel({
   reconciliation,
   onUpdated,
   showHeader = true,
+  readOnly = false,
 }: ReconciliationPanelProps) {
+  // Defensive guard: malformed/empty reconciliation should never hard-crash
+  if (!reconciliation || !reconciliation.summary) {
+    return (
+      <div className="rounded-lg border border-slate-700/40 bg-slate-900/30 px-4 py-3 text-xs text-slate-500 italic">
+        보정 정보를 불러올 수 없습니다.
+      </div>
+    );
+  }
   const { summary } = reconciliation;
   const allGood =
     summary.materialsToFill === 0 &&
@@ -364,6 +419,7 @@ export function ReconciliationPanel({
             workflowId={workflowId}
             items={reconciliation.materialsToFill}
             onUpdated={onUpdated}
+            readOnly={readOnly}
           />
         </section>
       )}
@@ -378,6 +434,7 @@ export function ReconciliationPanel({
             workflowId={workflowId}
             items={reconciliation.knowledge}
             onUpdated={onUpdated}
+            readOnly={readOnly}
           />
         </section>
       )}

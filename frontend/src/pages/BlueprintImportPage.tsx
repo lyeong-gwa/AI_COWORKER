@@ -248,12 +248,16 @@ export default function BlueprintImportPage() {
             <PlanPreview plan={dryRunResult.plan} />
 
             <div className="border-t border-slate-800 pt-6">
-              <div className="text-[10px] font-mono tracking-[0.2em] uppercase text-amber-400 mb-4">보정 미리보기</div>
+              <div className="text-[10px] font-mono tracking-[0.2em] uppercase text-amber-400 mb-3">보정 미리보기</div>
+              <p className="text-[11px] text-slate-500 italic mb-4">
+                ※ 미리보기입니다. 재료 입력·지식 보정은 '가져오기 확정' 후 가능합니다.
+              </p>
               <ReconciliationPanel
-                workflowId="__preview__"
+                workflowId=""
                 reconciliation={dryRunResult.reconciliation}
                 onUpdated={() => {}}
                 showHeader={true}
+                readOnly
               />
             </div>
 
