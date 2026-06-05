@@ -973,6 +973,7 @@ async def import_blueprint(
         tags=wf_meta.get("tags") or [],
         trigger=wf_meta.get("trigger") or {"type": "manual", "config": {}},
         variables=wf_meta.get("variables") or {},
+        status=WorkflowStatus.ACTIVE,
         created_by="cli",
         generation_trace_ids=[],
     )

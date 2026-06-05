@@ -879,3 +879,37 @@ async def test_e2e_export_then_import_roundtrip_validates():
         await _delete_workflow(src_wf)
         await _delete_api_def(api_id)
         await _delete_ai_node(ai_id)
+
+
+@pytest.mark.asyncio
+async def test_import_sets_status_active():
+    """import 로 생성된 워크플로우는 status 가 ACTIVE 여서 즉시 실행 가능하다."""
+    bp = _base_blueprint(
+        nodes=[
+            {"nodeId": "old-start", "definitionType": "form-start", "name": "S",
+             "orderIndex": 0, "config": {}, "configOverrides": {}, "inputMapping": {}},
+            {"nodeId": "old-out", "definitionType": "result", "name": "OUT",
+             "orderIndex": 1, "config": {}, "configOverrides": {}, "inputMapping": {}},
+        ],
+        connections=[
+            {"id": "c1", "sourceNodeId": "old-start", "targetNodeId": "old-out",
+             "sourceHandle": None, "targetHandle": None, "condition": None},
+        ],
+    )
+    r = client.post("/api/v1/blueprint/import", json={"blueprint": bp})
+    assert r.status_code == 200, r.text
+    wf_id = r.json()["workflowId"]
+    try:
+        # DB 직접 확인
+        async with async_session_maker() as db:
+            wf = await db.get(Workflow, wf_id)
+            assert wf is not None
+            assert wf.status == WorkflowStatus.ACTIVE, (
+                f"Expected ACTIVE, got {wf.status!r}"
+            )
+        # GET /workflows/{id} 응답에서도 확인
+        resp = client.get(f"/api/v1/workflows/{wf_id}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "active"
+    finally:
+        await _delete_workflow(wf_id)
