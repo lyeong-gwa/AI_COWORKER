@@ -11,6 +11,33 @@
 
 ## 후속 변경 이력
 
+### 2026-06-05 — 워크플로우 설계도(blueprint) 추출·이식 + 스냅샷 동결
+워크플로우를 자체 포함 설계도로 추출·이식하는 기능. 핵심은 저장 시 스펙을 "동결(freeze-once)" 하여 원본 재료 변경과 무관하게 과거 스펙으로 실행하고, 필요하면 재동기화로만 최신 반영.
+- **스냅샷 동결 (freeze-once)**: 워크플로우 저장 시 참조한 API명세(url/headers/bodyTemplate/responseSchema)와 커스텀 AI노드 스펙(system_prompt/parameters)을 노드 config에 `apiSpecSnapshot`/`aiNodeSnapshot` 필드로 저장. 런타임은 스냅샷 우선 실행(없으면 원본 live 참조 폴백).
+- **NEW 엔드포인트: `GET /api/v1/blueprint/workflows/{id}`** — 설계도 추출. 응답은 자체 포함 JSON 문자열로 복사·붙여넣기 가능. 스냅샷·노드·연결·위치정보 포함, 재료(환경값 — 인증 토큰·defaultParams 값·헤더)는 `redactedFields` 매니페스트로 mask.
+- **NEW 엔드포인트: `POST /api/v1/blueprint/import`** — `{blueprint, dryRun?}` 가져오기. 결정론적 재생으로 노드/연결에 새 id(`wn-`/`wc-`) 부여, 인스턴스DB는 이름 매칭 재사용 또는 신규 생성, **재료 레지스트리 미오염**(API명세/AI노드를 별도 등록하지 않고 워크플로우에만 임베드). 구조 검증 게이트 통과. dryRun이면 `{plan, reconciliation}` 반환(미저장), 정상 실행이면 `{workflowId, reconciliation}` + 새로운 인스턴스DB id 목록.
+- **NEW 엔드포인트: `POST /api/v1/blueprint/workflows/{id}/fill-materials`** — 보정 단계: 추출 후 mask된 환경값을 입력. `{values:[{nodeRef, path, value}]}`. 예: nodeRef="node-3", path="config.apiDefinition.headers.Authorization", value="Bearer xxx".
+- **NEW 엔드포인트: `POST /api/v1/blueprint/workflows/{id}/knowledge-remap`** — 보정 단계: knowledge 노드가 참조하던 카테고리를 대상 인스턴스의 카테고리로 재매핑. `{remaps:[{nodeRef, from, to}]}`. 지식은 live 의존이므로 인스턴스간 참조 이름 조정 필요.
+- **NEW 엔드포인트: `POST /api/v1/workflows/{id}/resync-snapshots`** — 재동기화: 원본 API명세/커스텀 AI노드가 변경되었을 때 스냅샷만 새로 동결. `{nodeIds?, dryRun?}`. 전체 또는 특정 노드만 선택 동결.
+- **백필 스크립트: `backend/scripts/backfill_snapshots.py`** — 기존 워크플로우에 스냅샷 추가 (한 줄 실행).
+- **프론트엔드**: 워크플로우 상세 페이지에 "설계도 내보내기" 버튼(blueprint 추출), "재동기화" 버튼. 워크플로우 목록에 "설계도 가져오기" 버튼(`/workflows/import`). 가져오기 후 보정 단계 폼(fill-materials/knowledge-remap).
+- **인스턴스DB**: 메타(name/viewerHints/tags/description)만 스냅샷, 레코드는 미복사(live).
+- **지식**: 스냅샷 없음(live 의존). 타 인스턴스에 이식 시 `knowledge-remap` 엔드포인트로 카테고리 대응.
+- **459 백엔드 테스트 통과 + 프론트 빌드 0 에러**.
+
+### 2026-06-05 — 워크플로우 생성 채팅 이력 보존 + 편집 모드 복원
+워크플로우 생성·편집 시 LLM 게이트웨이와의 대화를 보존하고 편집 모드에서 재생하는 기능. 핵심은 새 저장소 추가 없이 기존 생성 추적 JSONL을 재활용.
+- **`Workflow.generationTraceIds: string[]`** — 이 워크플로우 생성·편집에 관여한 생성 추적(trace) id 배열. `POST /workflows` 설정, `PATCH /workflows/{id}` append/union(dedup).
+- **생성 추적 저장소 확장** — 기존 JSONL trace는 `userMessage`, `assistantMessage` 필드를 추가로 저장하여 Q&A 쌍 재구성 가능.
+- **NEW 엔드포인트: `GET /workflows/{id}/generation-traces`** — 순서대로(최신) 대화 항목 조회. 응답: `[{traceId, createdAt, mode, userMessage, assistantMessage, attempts, result, errorCount, warningCount}, ...]`
+- **편집 모드 복원** — `/workflows/:id/edit` 진입 시 이전 대화 로드 → UI에 "── 이전 대화 ──" / "── 이어서 편집 ──" 구분선 및 muted "이전" 버블 표시 후 새 입력 폼.
+
+### 2026-06-02 — 웹 채팅 워크플로우 생성 + 결정론적 검증 게이트
+워크플로우 생성 주체를 **CLI 전용 → CLI + 웹 채팅** 으로 확장. 핵심 동기: CLI 모델별 생성 품질 편차, 그리고 단절 노드·데이터 비호환 워크플로우가 검증 없이 저장되던 문제.
+- **결정론적 검증** `app/services/workflow_validator.py` — `validate_workflow_structure`. ERROR 9종(단절/도달불가/끊긴엣지/트리거없음/미지deftype/필수config누락/참조ID없음/sorter핸들/순환)은 생성·수정 시 422로 차단. WARNING 4종은 보고. 카탈로그가 SSoT. 모든 `POST/PATCH/PUT /workflows`에 게이트 적용 + 미저장 `POST /workflows/validate`.
+- **단계적 생성** `app/services/workflow_generator.py` — `POST /workflows/generate`. 앱 백엔드가 `get_llm_handler()`(폐쇄망 custom_api 1급)로 Plan→Assemble→Validate→Repair(≤3) 루프 수행. **노드 배치는 AI 판단, 구조 정합성은 검증 프로세스가 강제.** 노드/연결 id는 서버가 항상 전역 고유로 재부여(LLM 예시 id 복사로 인한 PK 충돌 방지).
+- **웹 UI** `/workflows/new/chat` (`ChatWorkflowGeneratorPage`) — 채팅 입력 + draft 미리보기 + 검증 리포트 + 확정 저장. 백엔드 테스트 344 통과, 프론트 빌드 0 에러, end-to-end 검증 완료.
+
 ### 2026-05-12 — InstanceDB 파일시스템 재설계
 SQLite 테이블 `instance_dbs`, `instance_db_records` 를 폴더+JSON 으로 전환. JSON Schema·dedup_key 폐기. Phase 1-4 백엔드 테스트 120/120 통과. 상세는 `instance-db-fs-redesign.md`.
 

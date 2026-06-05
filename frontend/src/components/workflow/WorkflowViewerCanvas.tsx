@@ -267,10 +267,13 @@ export function WorkflowViewerCanvas({
           style={{ bottom: 20, left: 20 }}
           showInteractive={false}
         />
+        {/* pointerEvents: 'none' — 미니맵이 표시 전용(pannable/zoomable 없음)이므로
+            클릭 이벤트를 차단하지 않도록 설정. 하단 우측 노드들의 클릭이 미니맵에
+            가려지는 문제를 방지한다. */}
         <MiniMap
           nodeStrokeColor="#333"
           nodeColor={(n) => nodeRegistry.getMinimapColor(n.type || '')}
-          style={{ bottom: 20, right: 20, background: '#111827', borderRadius: 8 }}
+          style={{ bottom: 20, right: 20, background: '#111827', borderRadius: 8, pointerEvents: 'none' }}
         />
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#1f2937" />
       </ReactFlow>

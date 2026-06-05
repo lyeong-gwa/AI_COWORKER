@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { Node } from '@xyflow/react';
-import { workflowApi, nodeApi, type WorkflowExecution, type NodeCatalogEntry } from '../services/api';
+import { workflowApi, nodeApi, type WorkflowExecution, type NodeCatalogEntry, type Reconciliation } from '../services/api';
 import type { Workflow, WorkflowNodeInstance, AINode } from '../types';
 import { WorkflowViewerCanvas } from '../components/workflow/WorkflowViewerCanvas';
 import type { InspectedEdge } from '../components/workflow/WorkflowViewerCanvas';
@@ -27,6 +27,9 @@ import { StatusBadge } from '../components/common/StatusBadge';
 import { EmptyState } from '../components/common/EmptyState';
 import { useToast } from '../components/common/Toast';
 import { WorkflowScheduleCard } from '../components/workflow/WorkflowScheduleCard';
+import { BlueprintExportModal } from '../components/blueprint/BlueprintExportModal';
+import { ReconciliationPanel } from '../components/blueprint/ReconciliationPanel';
+import { ResyncModal } from '../components/blueprint/ResyncModal';
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -103,6 +106,90 @@ function formatRelative(iso?: string | null): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+// ─── api-start param field helpers ──────────────────────────
+
+interface ApiStartParam {
+  name: string;
+  in: string;
+  type: string;
+  required: boolean;
+  description?: string;
+  default?: string;
+  enum?: string[];
+}
+
+/**
+ * Build a deduplicated param list for an api-start trigger node.
+ *
+ * Priority order:
+ *  1. apiSpecSnapshot.parameters — frozen spec array (the canonical source)
+ *  2. Any additional keys in defaultParams not already covered by (1)
+ *
+ * Returns [] (triggers JSON-textarea fallback) when neither source exists.
+ */
+function extractApiStartParams(triggerNode: WorkflowNodeInstance): ApiStartParam[] {
+  const config = (triggerNode.config ?? {}) as Record<string, unknown>;
+  const snapshot = config.apiSpecSnapshot as Record<string, unknown> | undefined;
+  const defaultParams = (config.defaultParams ?? {}) as Record<string, unknown>;
+
+  const seen = new Set<string>();
+  const params: ApiStartParam[] = [];
+
+  // 1. parameters from frozen snapshot
+  const snapshotParams = (snapshot?.parameters ?? []) as ApiStartParam[];
+  for (const p of snapshotParams) {
+    if (!p.name || seen.has(p.name)) continue;
+    seen.add(p.name);
+    params.push({
+      name: p.name,
+      in: p.in ?? 'query',
+      type: p.type ?? 'string',
+      required: !!p.required,
+      description: p.description,
+      default: p.default,
+      enum: Array.isArray((p as any).enum) ? (p as any).enum : undefined,
+    });
+  }
+
+  // 2. defaultParams keys not already in snapshot
+  for (const key of Object.keys(defaultParams)) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    params.push({
+      name: key,
+      in: 'query',
+      type: typeof defaultParams[key] === 'number' ? 'number' : 'string',
+      required: false,
+      description: undefined,
+      default: defaultParams[key] != null ? String(defaultParams[key]) : undefined,
+    });
+  }
+
+  return params;
+}
+
+/**
+ * Build initial form-values map: defaultParams value takes priority over
+ * the parameter's own `default` field.
+ */
+function buildApiStartInitialValues(
+  params: ApiStartParam[],
+  defaultParams: Record<string, unknown>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of params) {
+    const fromDefaults = defaultParams[p.name];
+    if (fromDefaults != null) {
+      out[p.name] = String(fromDefaults);
+    } else if (p.default != null) {
+      out[p.name] = String(p.default);
+    } else {
+      out[p.name] = '';
+    }
+  }
+  return out;
+}
+
 // ─── Run Modal ───────────────────────────────────────────────
 
 interface RunModalProps {
@@ -115,34 +202,119 @@ interface RunModalProps {
 
 function RunModal({ workflow, triggerNode, onClose, onSubmit, submitting }: RunModalProps) {
   const isApiStart = triggerNode?.definitionType === 'api-start';
+
+  // api-start: derive param list and initial values
+  const apiStartParams = useMemo(
+    () => (isApiStart && triggerNode ? extractApiStartParams(triggerNode) : []),
+    [isApiStart, triggerNode],
+  );
+
+  // true = has structured params to show; false = fall back to raw JSON textarea
+  const hasApiStartParams = apiStartParams.length > 0;
+
+  const apiStartDefaults = useMemo(() => {
+    if (!isApiStart || !triggerNode) return {};
+    const dp = ((triggerNode.config ?? {}) as Record<string, unknown>).defaultParams as
+      | Record<string, unknown>
+      | undefined ?? {};
+    return dp;
+  }, [isApiStart, triggerNode]);
+
+  // form-start fields (existing logic)
   const formFields = useMemo(
     () => (triggerNode && triggerNode.definitionType === 'form-start' ? extractFormFields(workflow, triggerNode) : []),
     [workflow, triggerNode],
   );
 
-  const [values, setValues] = useState<Record<string, string>>({});
+  // shared field values state (used by both form-start and api-start param form)
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    isApiStart ? buildApiStartInitialValues(apiStartParams, apiStartDefaults) : {},
+  );
+
+  // reset values when triggerNode changes (e.g. modal re-opened for different workflow)
+  const prevTriggerIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (triggerNode?.id !== prevTriggerIdRef.current) {
+      prevTriggerIdRef.current = triggerNode?.id;
+      if (isApiStart) {
+        setValues(buildApiStartInitialValues(apiStartParams, apiStartDefaults));
+      } else {
+        setValues({});
+      }
+    }
+  }, [triggerNode?.id, isApiStart, apiStartParams, apiStartDefaults]);
+
+  // advanced JSON textarea (api-start power-user fallback)
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [jsonPayload, setJsonPayload] = useState('{}');
   const [jsonError, setJsonError] = useState<string | null>(null);
+
+  const setFieldValue = (name: string, val: string) =>
+    setValues((prev) => ({ ...prev, [name]: val }));
 
   const handleSubmit = () => {
     if (!triggerNode) {
       onSubmit({});
       return;
     }
+
     if (isApiStart) {
-      try {
-        const parsed = jsonPayload.trim() ? JSON.parse(jsonPayload) : {};
-        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-          setJsonError('JSON 객체 형태여야 합니다 (예: {"key": "value"})');
+      // If the advanced JSON textarea was opened AND modified from default '{}', use it directly
+      if (advancedOpen && jsonPayload.trim() !== '{}') {
+        try {
+          const parsed = JSON.parse(jsonPayload.trim() || '{}');
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            setJsonError('JSON 객체 형태여야 합니다 (예: {"key": "value"})');
+            return;
+          }
+          setJsonError(null);
+          onSubmit(parsed);
+        } catch (e) {
+          setJsonError(`JSON 파싱 실패: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return;
+      }
+
+      // Otherwise use the param form (or empty object if no params)
+      if (hasApiStartParams) {
+        // required validation
+        const missing = apiStartParams.filter(
+          (p) => p.required && !(values[p.name] ?? '').trim(),
+        );
+        if (missing.length > 0) {
+          setJsonError(`필수 입력 누락: ${missing.map((p) => p.name).join(', ')}`);
           return;
         }
         setJsonError(null);
-        onSubmit(parsed);
-      } catch (e) {
-        setJsonError(`JSON 파싱 실패: ${e instanceof Error ? e.message : String(e)}`);
+        const inputData: Record<string, unknown> = {};
+        for (const p of apiStartParams) {
+          const raw = values[p.name] ?? '';
+          // coerce numeric type params
+          if (p.type === 'number' || p.type === 'integer') {
+            const n = Number(raw);
+            inputData[p.name] = isNaN(n) ? raw : n;
+          } else {
+            inputData[p.name] = raw;
+          }
+        }
+        onSubmit(inputData);
+      } else {
+        // legacy JSON fallback (no params defined)
+        try {
+          const parsed = jsonPayload.trim() ? JSON.parse(jsonPayload) : {};
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            setJsonError('JSON 객체 형태여야 합니다 (예: {"key": "value"})');
+            return;
+          }
+          setJsonError(null);
+          onSubmit(parsed);
+        } catch (e) {
+          setJsonError(`JSON 파싱 실패: ${e instanceof Error ? e.message : String(e)}`);
+        }
       }
       return;
     }
+
     // form-start: required 검증
     const missing = formFields.filter((f) => f.required && !(values[f.name] || '').trim());
     if (missing.length > 0) {
@@ -156,6 +328,60 @@ function RunModal({ workflow, triggerNode, onClose, onSubmit, submitting }: RunM
     }
     onSubmit(inputData);
   };
+
+  // Group api-start params by `in` location for labelling
+  const paramGroups = useMemo(() => {
+    if (!hasApiStartParams) return {};
+    const groups: Record<string, ApiStartParam[]> = {};
+    for (const p of apiStartParams) {
+      const loc = p.in ?? 'query';
+      if (!groups[loc]) groups[loc] = [];
+      groups[loc].push(p);
+    }
+    return groups;
+  }, [apiStartParams, hasApiStartParams]);
+
+  const IN_LABEL: Record<string, string> = {
+    path: 'Path',
+    query: 'Query',
+    header: 'Header',
+    body: 'Body',
+  };
+
+  const renderParamField = (p: ApiStartParam, autoFocusFirst: boolean) => (
+    <div key={p.name}>
+      <label className="block text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-1.5">
+        {p.name}
+        {p.required && <span className="text-rose-400 ml-1">*</span>}
+      </label>
+      {p.description && (
+        <p className="text-[11px] text-slate-500 mb-1">{p.description}</p>
+      )}
+      {p.enum && p.enum.length > 0 ? (
+        <select
+          value={values[p.name] ?? ''}
+          onChange={(e) => setFieldValue(p.name, e.target.value)}
+          className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:border-sky-600"
+        >
+          {!p.required && <option value="">-- 선택 (선택 사항) --</option>}
+          {p.enum.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          type={/token|password|secret|key/i.test(p.name) ? 'password' : 'text'}
+          value={values[p.name] ?? ''}
+          onChange={(e) => setFieldValue(p.name, e.target.value)}
+          className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:border-sky-600"
+          placeholder={p.default != null ? `기본값: ${p.default}` : `${p.name} 입력...`}
+          autoFocus={autoFocusFirst}
+        />
+      )}
+    </div>
+  );
 
   return (
     <div
@@ -186,7 +412,54 @@ function RunModal({ workflow, triggerNode, onClose, onSubmit, submitting }: RunM
             </p>
           )}
 
-          {isApiStart && (
+          {/* api-start: structured param form */}
+          {isApiStart && hasApiStartParams && (
+            <>
+              {Object.entries(paramGroups).map(([loc, params], groupIdx) => (
+                <div key={loc}>
+                  {Object.keys(paramGroups).length > 1 && (
+                    <div className="text-[10px] font-mono tracking-[0.2em] uppercase text-slate-500 mb-2 pt-1 border-t border-slate-800 first:border-0 first:pt-0">
+                      {IN_LABEL[loc] ?? loc} 파라미터
+                    </div>
+                  )}
+                  <div className="space-y-4">
+                    {params.map((p, i) =>
+                      renderParamField(p, groupIdx === 0 && i === 0),
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {/* Advanced JSON toggle */}
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAdvancedOpen((v) => !v)}
+                  className="text-[11px] font-mono text-slate-500 hover:text-sky-400 transition-colors flex items-center gap-1"
+                >
+                  <span>{advancedOpen ? '▾' : '▸'}</span>
+                  고급: JSON 직접 입력
+                </button>
+                {advancedOpen && (
+                  <div className="mt-2">
+                    <textarea
+                      value={jsonPayload}
+                      onChange={(e) => setJsonPayload(e.target.value)}
+                      rows={5}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-sky-600"
+                      placeholder='{ "key": "value" }'
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      비워두거나 {"{}"}이면 위 폼 값이 사용됩니다. 수정하면 이 JSON이 우선합니다.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* api-start: legacy fallback — no params defined */}
+          {isApiStart && !hasApiStartParams && (
             <div>
               <label className="block text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-2">
                 Payload (선택)
@@ -204,6 +477,7 @@ function RunModal({ workflow, triggerNode, onClose, onSubmit, submitting }: RunM
             </div>
           )}
 
+          {/* form-start */}
           {!isApiStart && triggerNode && (
             <>
               {formFields.length === 0 ? (
@@ -222,14 +496,27 @@ function RunModal({ workflow, triggerNode, onClose, onSubmit, submitting }: RunM
                       {field.label}
                       {field.required && <span className="text-rose-400 ml-1">*</span>}
                     </label>
-                    <input
-                      type={/token|password|secret|key/i.test(field.name) ? 'password' : 'text'}
-                      value={values[field.name] || ''}
-                      onChange={(e) => setValues((v) => ({ ...v, [field.name]: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:border-sky-600"
-                      placeholder={`${field.label} 입력...`}
-                      autoFocus={formFields[0]?.name === field.name}
-                    />
+                    {field.enum && field.enum.length > 0 ? (
+                      <select
+                        value={values[field.name] ?? ''}
+                        onChange={(e) => setFieldValue(field.name, e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:border-sky-600"
+                      >
+                        {!field.required && <option value="">-- 선택 (선택 사항) --</option>}
+                        {field.enum.map((opt) => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={/token|password|secret|key/i.test(field.name) ? 'password' : 'text'}
+                        value={values[field.name] || ''}
+                        onChange={(e) => setFieldValue(field.name, e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:border-sky-600"
+                        placeholder={`${field.label} 입력...`}
+                        autoFocus={formFields[0]?.name === field.name}
+                      />
+                    )}
                   </div>
                 ))
               )}
@@ -375,6 +662,12 @@ export default function WorkflowViewerPage() {
   const [selectedEdge, setSelectedEdge] = useState<InspectedEdge | null>(null);
   const hasAutoOpenedRef = useRef(false);
 
+  // Blueprint / Reconciliation / Resync state
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [resyncModalOpen, setResyncModalOpen] = useState(false);
+  const [reconciliation, setReconciliation] = useState<Reconciliation | null>(null);
+  const [reconciliationOpen, setReconciliationOpen] = useState(false);
+
   // Load AI nodes for FactoryNode context
   useEffect(() => {
     nodeApi.list().then(setAiNodes).catch(() => setAiNodes([]));
@@ -464,6 +757,14 @@ export default function WorkflowViewerPage() {
   useEffect(() => {
     loadInstances();
   }, [loadInstances]);
+
+  // Load reconciliation state for this workflow (non-blocking; 404 means no pending state)
+  useEffect(() => {
+    if (!id) return;
+    // Try to fetch reconciliation to check if there's pending fill-materials or knowledge issues
+    // We do a lightweight check by exporting (no — that's heavy). Instead we rely on
+    // user manually triggering "보정" or it being set after import. So we skip auto-fetch here.
+  }, [id]);
 
   // Auto-open run modal if ?run=1 (from dashboard 실행 버튼)
   useEffect(() => {
@@ -574,18 +875,51 @@ export default function WorkflowViewerPage() {
               <p className="text-xs text-slate-500 mt-0.5 truncate">{workflow.description}</p>
             )}
           </div>
-          <div className="flex-shrink-0 flex items-center gap-2">
+          <div className="flex-shrink-0 flex items-center gap-2 flex-wrap">
             <span className="text-[11px] font-mono text-slate-500 hidden md:inline">
               {workflow.id}
             </span>
+            {/* Blueprint export */}
             <button
-              onClick={() => {
-                if (triggerNode?.definitionType === 'api-start') {
-                  handleRun({});
-                } else {
-                  setRunModalOpen(true);
-                }
-              }}
+              onClick={() => setExportModalOpen(true)}
+              title="설계도 내보내기"
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 hover:text-slate-100 text-sm transition-all inline-flex items-center gap-1.5"
+            >
+              <span>📤</span>
+              <span className="hidden sm:inline">설계도</span>
+            </button>
+            {/* Resync */}
+            <button
+              onClick={() => setResyncModalOpen(true)}
+              title="스냅샷 재동기화"
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 hover:text-slate-100 text-sm transition-all inline-flex items-center gap-1.5"
+            >
+              <span>🔄</span>
+              <span className="hidden sm:inline">재동기화</span>
+            </button>
+            {/* Reconciliation shortcut — shown when there's pending reconciliation */}
+            {reconciliation && (reconciliation.summary.materialsToFill > 0 || reconciliation.summary.knowledge.missing > 0) && (
+              <button
+                onClick={() => setReconciliationOpen((v) => !v)}
+                title="보정 패널"
+                className="px-3 py-2 rounded-lg bg-amber-800/40 border border-amber-600/50 hover:bg-amber-700/40 text-amber-300 hover:text-amber-200 text-sm transition-all inline-flex items-center gap-1.5"
+              >
+                <span>⚙</span>
+                <span className="hidden sm:inline">보정</span>
+                <span className="ml-0.5 text-[10px] font-mono">
+                  {reconciliation.summary.materialsToFill + reconciliation.summary.knowledge.missing}
+                </span>
+              </button>
+            )}
+            <button
+              onClick={() => navigate(`/workflows/${id}/edit`)}
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 hover:text-slate-100 text-sm transition-all inline-flex items-center gap-1.5"
+            >
+              <span>✏</span>
+              편집
+            </button>
+            <button
+              onClick={() => setRunModalOpen(true)}
               disabled={!canRun || submitting}
               className="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-semibold transition-all shadow-lg shadow-sky-900/40 inline-flex items-center gap-2"
             >
@@ -660,6 +994,31 @@ export default function WorkflowViewerPage() {
         </div>
       </section>
 
+      {/* Reconciliation panel (inline, collapsible) */}
+      {reconciliation && reconciliationOpen && (
+        <section className="border-t border-amber-800/40 bg-slate-950">
+          <div className="w-full px-6 py-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-mono tracking-[0.2em] uppercase text-amber-400">
+                보정 (Reconciliation)
+              </h2>
+              <button
+                onClick={() => setReconciliationOpen(false)}
+                className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                닫기 ×
+              </button>
+            </div>
+            <ReconciliationPanel
+              workflowId={workflow.id}
+              reconciliation={reconciliation}
+              onUpdated={setReconciliation}
+              showHeader={false}
+            />
+          </div>
+        </section>
+      )}
+
       {/* Run modal */}
       {runModalOpen && (
         <RunModal
@@ -668,6 +1027,29 @@ export default function WorkflowViewerPage() {
           submitting={submitting}
           onClose={() => setRunModalOpen(false)}
           onSubmit={handleRun}
+        />
+      )}
+
+      {/* Blueprint export modal */}
+      {exportModalOpen && (
+        <BlueprintExportModal
+          workflowId={workflow.id}
+          workflowName={workflow.name}
+          onClose={() => setExportModalOpen(false)}
+        />
+      )}
+
+      {/* Resync modal */}
+      {resyncModalOpen && (
+        <ResyncModal
+          workflowId={workflow.id}
+          workflowName={workflow.name}
+          onClose={() => setResyncModalOpen(false)}
+          onApplied={() => {
+            setResyncModalOpen(false);
+            // Reload workflow to reflect updated snapshots
+            workflowApi.get(workflow.id).then(setWorkflow).catch(() => {});
+          }}
         />
       )}
     </div>

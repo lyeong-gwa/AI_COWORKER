@@ -10,6 +10,15 @@ const WorkflowListPage = lazy(() => import('./pages/WorkflowListPage'));
 const WorkflowViewerPage = lazy(() => import('./pages/WorkflowViewerPage'));
 const InstanceDetailPage = lazy(() => import('./pages/InstanceDetailPage'));
 
+// Phase 3: 채팅 기반 워크플로우 생성
+const ChatWorkflowGeneratorPage = lazy(() => import('./pages/ChatWorkflowGeneratorPage'));
+
+// Phase 9: Blueprint import
+const BlueprintImportPage = lazy(() => import('./pages/BlueprintImportPage'));
+
+// 생성 히스토리 뷰어
+const GenerationHistoryPage = lazy(() => import('./pages/GenerationHistoryPage'));
+
 // Phase 3b: 읽기 전용 축소판
 const KnowledgeViewerPage = lazy(() =>
   import('./pages/KnowledgeViewerPage').then((m) => ({ default: m.KnowledgeViewerPage })),
@@ -55,6 +64,14 @@ function App() {
 
                 {/* 워크플로우 */}
                 <Route path="workflows" element={<WorkflowListPage />} />
+                {/* Phase 3: 채팅 생성 — ":id" 라우트보다 먼저 */}
+                <Route path="workflows/new/chat" element={<ChatWorkflowGeneratorPage />} />
+                {/* Phase 9: Blueprint import — ":id" 라우트보다 먼저 */}
+                <Route path="workflows/import" element={<BlueprintImportPage />} />
+                {/* 생성 히스토리 뷰어 — ":id" 라우트보다 먼저 */}
+                <Route path="workflows/generation-history" element={<GenerationHistoryPage />} />
+                {/* 채팅 편집 모드 — ":id" 동적 라우트보다 먼저 */}
+                <Route path="workflows/:id/edit" element={<ChatWorkflowGeneratorPage />} />
                 <Route path="workflows/:id" element={<WorkflowViewerPage />} />
                 <Route
                   path="workflows/:id/instances/:iid"

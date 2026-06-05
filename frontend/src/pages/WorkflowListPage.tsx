@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { workflowApi, type WorkflowSummary } from '../services/api';
+
 import { StatusBadge } from '../components/common/StatusBadge';
 import { EmptyState } from '../components/common/EmptyState';
 import { CliHint } from '../components/common/CliHint';
@@ -93,16 +94,34 @@ export default function WorkflowListPage() {
     <div className="h-full overflow-auto bg-slate-950">
       <div className="w-full px-6 py-8">
         {/* Header */}
-        <header className="mb-6">
-          <div className="text-[11px] font-mono tracking-[0.25em] uppercase text-slate-500 mb-2">
-            업무자동화
+        <header className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <div className="text-[11px] font-mono tracking-[0.25em] uppercase text-slate-500 mb-2">
+              업무자동화
+            </div>
+            <h1 className="text-3xl font-light text-slate-50 tracking-tight">
+              업무자동화 목록
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">
+              {workflows.length}개 등록됨 · 표시 중 {filtered.length}개
+            </p>
           </div>
-          <h1 className="text-3xl font-light text-slate-50 tracking-tight">
-            업무자동화 목록
-          </h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {workflows.length}개 등록됨 · 표시 중 {filtered.length}개
-          </p>
+          <div className="flex-shrink-0 mt-1 flex items-center gap-2">
+            <Link
+              to="/workflows/import"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-700/40 border border-slate-600/50 text-slate-300 text-sm font-medium hover:bg-slate-700/60 hover:border-slate-500/70 hover:text-slate-100 transition-all"
+            >
+              <span>📥</span>
+              <span>설계도 가져오기</span>
+            </Link>
+            <Link
+              to="/workflows/new/chat"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600/20 border border-sky-600/50 text-sky-300 text-sm font-medium hover:bg-sky-600/30 hover:border-sky-500/70 hover:text-sky-200 transition-all"
+            >
+              <span>💬</span>
+              <span>채팅으로 생성</span>
+            </Link>
+          </div>
         </header>
 
         <div className="mb-4">

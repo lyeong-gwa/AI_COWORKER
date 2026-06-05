@@ -124,6 +124,39 @@ async def init_db() -> None:
         except Exception as e:
             print(f"[MIGRATE] workflows.schedule_config 마이그레이션 스킵: {e}")
 
+    # 마이그레이션 (2026-06-04): workflows.generation_trace_ids 컬럼 추가.
+    # 채팅 생성 추적(generation trace) id 목록을 워크플로우에 연결해 생성 대화를 보존한다.
+    # SQLite 는 ALTER TABLE ADD COLUMN 의 DEFAULT 에 표현식을 직접 받지 못하므로
+    # 빈 배열 리터럴 '[]' 를 server_default 로 부여하고, 기존 NULL row 는 UPDATE 로 채운다.
+    async with engine.begin() as conn:
+        try:
+            cols = await conn.execute(text("PRAGMA table_info(workflows)"))
+            col_names = [row[1] for row in cols.fetchall()]
+            if "generation_trace_ids" not in col_names:
+                await conn.execute(
+                    text(
+                        "ALTER TABLE workflows ADD COLUMN generation_trace_ids JSON "
+                        "NOT NULL DEFAULT '[]'"
+                    )
+                )
+                # 방어적: 혹시 NULL 인 row 가 있으면 빈 배열로 채운다.
+                await conn.execute(
+                    text(
+                        "UPDATE workflows SET generation_trace_ids = '[]' "
+                        "WHERE generation_trace_ids IS NULL"
+                    )
+                )
+                print("[MIGRATE] workflows.generation_trace_ids 컬럼 추가 + 기존 row '[]' 부여")
+            else:
+                await conn.execute(
+                    text(
+                        "UPDATE workflows SET generation_trace_ids = '[]' "
+                        "WHERE generation_trace_ids IS NULL"
+                    )
+                )
+        except Exception as e:
+            print(f"[MIGRATE] workflows.generation_trace_ids 마이그레이션 스킵: {e}")
+
     # 마이그레이션 (2026-05-27 v2): schedule_config 에 payload 키 보강.
     # 기존 row 의 schedule_config 가 dict 이지만 payload 키가 없으면 빈 dict 로 추가.
     # SQLite 의 json_set 은 항상 키를 덮어쓰므로 json_extract 로 키 부재를 확인한 row 만 갱신.

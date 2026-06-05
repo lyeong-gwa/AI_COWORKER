@@ -4,7 +4,7 @@ Workflow API Routes
 
 from datetime import datetime
 from typing import List, Optional, AsyncGenerator
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 import uuid
 import json
 import asyncio
+import copy
 
 from ...core.database import get_db
 from ...core.exceptions import NotFoundError, ValidationError
@@ -22,6 +23,8 @@ from ...models.workflow import (
 from ...schemas.workflow import (
     WorkflowCreate, WorkflowUpdate,
     ExecutionCreate, ScheduleConfigUpdate,
+    WorkflowValidateRequest,
+    WorkflowGenerateRequest,
 )
 from ...services.workflow_engine import execute_workflow
 from ...services.audit import log as audit_log
@@ -99,6 +102,7 @@ def workflow_to_camel(wf: Workflow) -> dict:
         "createdBy": wf.created_by,
         "nodes": [workflow_node_to_camel(n) for n in wf.nodes],
         "connections": [workflow_connection_to_camel(c) for c in wf.connections],
+        "generationTraceIds": list(wf.generation_trace_ids or []),
         "createdAt": wf.created_at.isoformat() if wf.created_at else None,
         "updatedAt": wf.updated_at.isoformat() if wf.updated_at else None,
     }
@@ -175,6 +179,53 @@ async def list_workflows(
     return [workflow_summary_to_camel(w) for w in workflows]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Generation Trace 조회 API
+# 주의: /{workflow_id} 동적 경로보다 먼저 등록해야 충돌하지 않는다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/generation-traces",
+    summary="워크플로우 생성 추적 로그 목록 조회",
+    description=(
+        "최근 N건의 워크플로우 생성 요청 요약 목록을 최신순으로 반환한다. "
+        "각 항목에는 traceId, 생성 시각, 모드, 설명(120자), "
+        "시도 횟수, 결과, 오류/경고 수, 노드 수가 포함된다. "
+        "limit 파라미터로 최대 조회 건수를 지정할 수 있다(기본 50)."
+    ),
+)
+async def list_generation_traces(
+    limit: int = Query(50, ge=1, le=500, description="최대 조회 건수"),
+):
+    """생성 추적 로그 요약 목록 반환 — 최신순."""
+    from ...services.generation_trace import read_traces
+    return read_traces(limit=limit)
+
+
+@router.get(
+    "/generation-traces/{trace_id}",
+    summary="워크플로우 생성 추적 로그 단건 조회",
+    description=(
+        "traceId 에 해당하는 생성 추적 로그 전체를 반환한다. "
+        "llmCalls(각 단계의 프롬프트·응답·토큰), "
+        "validationHistory(repair별 검증 결과), finalDraft 가 모두 포함된다. "
+        "해당 traceId 가 없으면 404를 반환한다."
+    ),
+)
+async def get_generation_trace(trace_id: str):
+    """생성 추적 로그 단건 전체 반환. 없으면 404."""
+    from ...services.generation_trace import get_trace
+    from ...core.exceptions import NotFoundError
+
+    trace = get_trace(trace_id)
+    if trace is None:
+        raise NotFoundError(
+            "생성 추적 로그를 찾을 수 없습니다",
+            details={"traceId": trace_id},
+        )
+    return trace
+
+
 @router.get(
     "/{workflow_id}",
     summary="워크플로우 상세 조회",
@@ -201,6 +252,123 @@ async def get_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
     return workflow_to_camel(workflow)
 
 
+@router.get(
+    "/{workflow_id}/generation-traces",
+    summary="워크플로우 생성 대화(Q&A) 조회",
+    description=(
+        "이 워크플로우를 만들어낸 채팅 생성/편집 대화를 오래된→최신 순으로 반환한다. "
+        "각 항목은 traceId, 생성 시각, 모드, 사용자 메시지(userMessage), "
+        "AI 응답(assistantMessage), 시도 횟수, 결과, 오류/경고 수를 포함한다. "
+        "편집 모드 진입 시 기존 대화를 복원하는 데 사용한다. "
+        "연결된 추적이 없으면 빈 배열, 워크플로우가 없으면 404를 반환한다."
+    ),
+)
+async def get_workflow_generation_traces(
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """워크플로우에 연결된 생성 추적(대화)을 순서대로 반환. 없으면 404."""
+    from ...services.generation_trace import (
+        get_traces_by_ids,
+        trace_to_conversation_item,
+    )
+
+    result = await db.execute(
+        select(Workflow).where(Workflow.id == workflow_id)
+    )
+    workflow = result.scalar_one_or_none()
+    if not workflow:
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
+
+    trace_ids = list(workflow.generation_trace_ids or [])
+    if not trace_ids:
+        return []
+
+    traces = get_traces_by_ids(trace_ids)
+    return [trace_to_conversation_item(t) for t in traces]
+
+
+@router.post(
+    "/validate",
+    summary="워크플로우 구조 사전 검증 (저장 없음)",
+    description=(
+        "nodes + connections 를 받아 결정론적 구조 검증을 실행하고 결과를 반환한다. "
+        "실제 저장은 하지 않는다. "
+        "``valid=true`` 이면 오류 없음. ``errors`` 는 생성 차단 사유, "
+        "``warnings`` 는 잠재적 문제다."
+    ),
+)
+async def validate_workflow(
+    data: WorkflowValidateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """워크플로우 구조 사전 검증 — 저장 없이 결과만 반환."""
+    from ...services.workflow_validator import validate_workflow_structure
+
+    result = await validate_workflow_structure(data.nodes, data.connections, db)
+    return result
+
+
+@router.post(
+    "/advise",
+    summary="워크플로우 config 품질 점검 및 수정 제안 (저장 없음)",
+    description=(
+        "nodes + connections 를 받아 결정론적 규칙으로 config 품질을 점검하고 "
+        "구체적인 수정 제안(suggestion)을 반환한다. LLM 호출 없음. "
+        "각 제안의 suggestion 문구를 채팅 입력창에 넣어 refine 로 반영하면 된다. "
+        "깨끗한 워크플로우면 suggestions 빈 배열."
+    ),
+)
+async def advise_workflow_endpoint(
+    data: WorkflowValidateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """워크플로우 config 품질 점검 — 결정론적 수정 제안 반환 (저장 없음)."""
+    from ...services.workflow_advisor import advise_workflow
+
+    result = await advise_workflow(data.nodes, data.connections, db)
+    return result
+
+
+@router.post(
+    "/generate",
+    summary="워크플로우 자동 생성 (AI 초안, 저장 없음)",
+    description=(
+        "사용자가 자연어로 업무를 설명하면 LLM 게이트웨이를 통해 "
+        "단계적으로 워크플로우 draft를 생성한다. "
+        "Phase 1 검증기(workflow_validator)로 게이트하여 구조적으로 올바른 draft를 반환하며, "
+        "저장은 하지 않는다. 확정 시 POST /workflows를 호출하면 된다."
+    ),
+)
+async def generate_workflow_endpoint(
+    data: WorkflowGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """LLM 기반 워크플로우 단계적 자동 생성 — draft 반환 (저장 없음)."""
+    from ...services.workflow_generator import generate_workflow
+
+    try:
+        result = await generate_workflow(
+            description=data.description,
+            db=db,
+            mode=data.mode,
+            base_workflow_id=data.baseWorkflowId,
+            history=data.history,
+            base_draft=data.baseDraft,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"워크플로우 생성 중 오류가 발생했습니다: {e}",
+        )
+    return result
+
+
 @router.post(
     "",
     status_code=201,
@@ -212,9 +380,40 @@ async def get_workflow(workflow_id: str, db: AsyncSession = Depends(get_db)):
         "position/viewport 필드는 존재하지 않으며 UI는 자동 레이아웃을 사용한다."
     ),
 )
-async def create_workflow(data: WorkflowCreate, db: AsyncSession = Depends(get_db)):
+async def create_workflow(
+    data: WorkflowCreate,
+    allowWarnings: bool = Query(True, description="경고가 있어도 저장 허용 여부 (향후 확장용)"),
+    db: AsyncSession = Depends(get_db),
+):
     """워크플로우 생성"""
+    from ...services.workflow_validator import validate_workflow_structure
+    from ...services.blueprint_snapshot import embed_snapshots_into_nodes
+
+    # 구조 검증 (DB commit 직전)
+    validation = await validate_workflow_structure(data.nodes, data.connections, db)
+    if not validation["valid"]:
+        raise ValidationError(
+            "워크플로우 구조 검증에 실패했습니다",
+            code="WORKFLOW_INVALID",
+            status_code=422,
+            details={
+                "errors": validation["errors"],
+                "warnings": validation["warnings"],
+            },
+        )
+
+    # 재료 스냅샷 동결 (freeze-once) — 노드 config 에 동결된 명세 임베딩
+    data.nodes = await embed_snapshots_into_nodes(db, data.nodes)
+
     workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
+
+    # 채팅 추적 id 목록 정규화 (순서 보존 + 중복 제거)
+    initial_trace_ids: list[str] = []
+    seen_trace_ids: set[str] = set()
+    for tid in (data.generationTraceIds or []):
+        if tid and tid not in seen_trace_ids:
+            seen_trace_ids.add(tid)
+            initial_trace_ids.append(tid)
 
     workflow = Workflow(
         id=workflow_id,
@@ -222,6 +421,7 @@ async def create_workflow(data: WorkflowCreate, db: AsyncSession = Depends(get_d
         description=data.description,
         tags=data.tags,
         created_by=data.createdBy,
+        generation_trace_ids=initial_trace_ids,
     )
     db.add(workflow)
 
@@ -272,9 +472,13 @@ async def create_workflow(data: WorkflowCreate, db: AsyncSession = Depends(get_d
 async def update_workflow(
     workflow_id: str,
     data: WorkflowUpdate,
+    allowWarnings: bool = Query(True, description="경고가 있어도 저장 허용 여부 (향후 확장용)"),
     db: AsyncSession = Depends(get_db),
 ):
     """워크플로우 수정"""
+    from ...services.workflow_validator import validate_workflow_structure
+    from ...services.blueprint_snapshot import embed_snapshots_into_nodes
+
     result = await db.execute(
         select(Workflow)
         .options(selectinload(Workflow.nodes), selectinload(Workflow.connections))
@@ -302,8 +506,48 @@ async def update_workflow(
     if data.variables is not None:
         workflow.variables = data.variables
 
+    # 채팅 추적 id 목록: 요청에 있으면 기존 목록에 순서 보존 + 중복 제거로 append.
+    # 요청이 omit(None) 이면 기존 목록을 그대로 보존한다.
+    if data.generationTraceIds is not None:
+        existing = list(workflow.generation_trace_ids or [])
+        seen = set(existing)
+        merged = list(existing)
+        for tid in data.generationTraceIds:
+            if tid and tid not in seen:
+                seen.add(tid)
+                merged.append(tid)
+        workflow.generation_trace_ids = merged
+        # JSON 컬럼 in-place 변경 추적 보장
+        try:
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(workflow, "generation_trace_ids")
+        except Exception:
+            pass
+
+    # 수정 후 최종 nodes/connections를 기준으로 검증
+    final_nodes = data.nodes if data.nodes is not None else list(workflow.nodes)
+    final_connections = data.connections if data.connections is not None else list(workflow.connections)
+
+    # 구조 검증 (DB commit 직전)
+    if data.nodes is not None or data.connections is not None:
+        validation = await validate_workflow_structure(final_nodes, final_connections, db)
+        if not validation["valid"]:
+            await db.rollback()
+            raise ValidationError(
+                "워크플로우 구조 검증에 실패했습니다",
+                code="WORKFLOW_INVALID",
+                status_code=422,
+                details={
+                    "errors": validation["errors"],
+                    "warnings": validation["warnings"],
+                },
+            )
+
     # 노드 업데이트 (전체 교체)
     if data.nodes is not None:
+        # 재료 스냅샷 동결 (freeze-once) — 기존 스냅샷은 보존, 참조 변경 시만 재캡처
+        data.nodes = await embed_snapshots_into_nodes(db, data.nodes)
+
         # 기존 노드 삭제
         for node in workflow.nodes:
             await db.delete(node)
@@ -354,6 +598,221 @@ async def update_workflow(
     workflow = result.scalar_one()
     await _safe_reload_jobs()
     return workflow_to_camel(workflow)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 재료 스냅샷 재동기화 (Phase 7) — freeze-once 를 우회한 강제 재캡처
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+from pydantic import BaseModel  # noqa: E402
+
+
+class ResyncSnapshotsRequest(BaseModel):
+    """재동기화 요청 바디.
+
+    - ``nodeIds``: 재동기화할 노드(nodeId 또는 PK) 부분집합. 생략/None 이면 전체 노드.
+    - ``dryRun``: True 면 diff 리포트만 반환하고 저장하지 않는다.
+    """
+
+    nodeIds: Optional[List[str]] = None
+    dryRun: bool = False
+
+
+# 스냅샷 키 — 재동기화 diff 비교 대상.
+_RESYNC_SNAPSHOT_KEYS = (
+    "apiSpecSnapshot",
+    "apiSpecSnapshots",
+    "aiNodeSnapshot",
+    "instanceDbMeta",
+)
+
+# 스냅샷 대상 def 타입 (재료 누락 판단용).
+_RESYNC_SNAPSHOTTABLE = {
+    "api-call",
+    "api-start",
+    "ai-api-router",
+    "ai-custom",
+    "instance-db-insert",
+    "instance-db-lookup",
+}
+
+
+def _snapshot_subset(config: dict) -> dict:
+    """config 에서 스냅샷 관련 키만 추린 dict (diff 비교용)."""
+    cfg = config or {}
+    out = {k: cfg[k] for k in _RESYNC_SNAPSHOT_KEYS if k in cfg}
+    if "snapshotSourceId" in cfg:
+        out["snapshotSourceId"] = cfg["snapshotSourceId"]
+    return out
+
+
+def _has_any_snapshot(config: dict) -> bool:
+    return any(k in (config or {}) for k in _RESYNC_SNAPSHOT_KEYS)
+
+
+def _diff_snapshot_fields(before: dict, after: dict) -> List[str]:
+    """before/after 스냅샷 subset 비교 → 변경된 최상위 키 목록."""
+    keys = set(before.keys()) | set(after.keys())
+    changed: List[str] = []
+    for k in sorted(keys):
+        if before.get(k) != after.get(k):
+            changed.append(k)
+    return changed
+
+
+async def _live_material_present(db: AsyncSession, node: WorkflowNode) -> bool:
+    """노드가 참조하는 라이브 재료가 현재 DB/스토어에 존재하는지 확인.
+
+    재동기화 후 변화가 없을 때 '재료가 동일' 인지 '재료가 사라짐' 인지 구분한다.
+    스냅샷 대상이 아닌 노드(knowledge/result 등)는 항상 True 로 본다.
+    """
+    from ...services.blueprint_snapshot import (
+        snapshot_api_def,
+        snapshot_ai_node,
+        snapshot_instance_db_meta,
+        snapshot_ai_router_apis,
+        _resolve_api_ref,
+        _resolve_ai_node_ref,
+        _resolve_instance_db_ref,
+        _resolve_router_ids,
+    )
+
+    cfg = node.config or {}
+    dt = node.definition_type
+
+    if dt in ("api-call", "api-start"):
+        ref = _resolve_api_ref(node, cfg)
+        if not ref:
+            return True  # 참조 없음 → 재료 누락 판정 대상 아님
+        return (await snapshot_api_def(db, ref)) is not None
+
+    if dt == "ai-custom":
+        ref = _resolve_ai_node_ref(node, cfg)
+        if not ref:
+            return True
+        return (await snapshot_ai_node(db, ref)) is not None
+
+    if dt in ("instance-db-insert", "instance-db-lookup"):
+        ref = _resolve_instance_db_ref(node, cfg)
+        if not ref:
+            return True
+        return (await snapshot_instance_db_meta(ref)) is not None
+
+    if dt == "ai-api-router":
+        selected = _resolve_router_ids(node, cfg)
+        snaps = await snapshot_ai_router_apis(db, selected)
+        return bool(snaps)
+
+    return True
+
+
+@router.post(
+    "/{workflow_id}/resync-snapshots",
+    summary="워크플로우 재료 스냅샷 강제 재동기화",
+    description=(
+        "지정 노드(또는 전체)의 동결 스냅샷을 **현재 라이브 재료** 기준으로 강제 재캡처한다. "
+        "정상 저장의 freeze-once 는 그대로 유지되고, 이 엔드포인트만 freeze 를 우회한다. "
+        "노드별 diff(changed/changedFields)를 리포트하며, 참조 재료가 라이브에 없으면 "
+        "`unsyncable` 로 보고하고 기존 스냅샷은 보존한다. `dryRun=true` 면 저장하지 않는다."
+    ),
+)
+async def resync_snapshots(
+    workflow_id: str,
+    data: ResyncSnapshotsRequest = Body(default_factory=ResyncSnapshotsRequest),
+    db: AsyncSession = Depends(get_db),
+):
+    """재료 스냅샷 강제 재동기화 + 노드별 diff 리포트."""
+    from ...services.blueprint_snapshot import embed_snapshots_into_nodes
+    from sqlalchemy.orm.attributes import flag_modified
+
+    req = data or ResyncSnapshotsRequest()
+
+    result = await db.execute(
+        select(Workflow)
+        .options(selectinload(Workflow.nodes))
+        .where(Workflow.id == workflow_id)
+    )
+    workflow = result.scalar_one_or_none()
+    if not workflow:
+        raise NotFoundError(
+            "워크플로우를 찾을 수 없습니다",
+            details={"workflowId": workflow_id},
+        )
+
+    nodes = list(workflow.nodes)
+
+    # 대상 노드 결정 — nodeIds 가 주어지면 부분집합(node_id 또는 PK 매칭), 없으면 전체.
+    if req.nodeIds is not None:
+        target_set = set(req.nodeIds)
+        targets = [
+            n for n in nodes if (n.node_id in target_set or n.id in target_set)
+        ]
+    else:
+        targets = list(nodes)
+
+    # 강제 재캡처 대상 식별자 집합 (embed 의 force_node_ids 매칭용).
+    force_ids: set = set()
+    for n in targets:
+        force_ids.add(n.node_id)
+        force_ids.add(n.id)
+
+    # 사전 상태 보존 (스냅샷 subset) — diff 계산용.
+    before_map = {n.id: copy.deepcopy(_snapshot_subset(n.config or {})) for n in targets}
+
+    # 라이브 재료 존재 여부를 재동기화 _전_ 에 판정 (대상 노드만).
+    live_present = {n.id: await _live_material_present(db, n) for n in targets}
+
+    # 강제 재동기화 — 전체 노드를 전달하되 force_node_ids 로 대상만 우회 재캡처.
+    # (대상 외 노드는 freeze-once 보존되므로 변경되지 않는다.)
+    await embed_snapshots_into_nodes(db, nodes, force_node_ids=force_ids)
+
+    reports: List[dict] = []
+    persisted = 0
+
+    for n in targets:
+        after_subset = _snapshot_subset(n.config or {})
+        before_subset = before_map.get(n.id, {})
+
+        changed_fields = _diff_snapshot_fields(before_subset, after_subset)
+        changed = len(changed_fields) > 0
+
+        # unsyncable: 스냅샷 대상 타입인데 라이브 재료가 없어 재캡처 불가.
+        # → 변경 없음, 기존 스냅샷 보존.
+        is_snapshottable = n.definition_type in _RESYNC_SNAPSHOTTABLE
+        unsyncable = (
+            is_snapshottable
+            and not changed
+            and not live_present.get(n.id, True)
+        )
+
+        if changed:
+            flag_modified(n, "config")
+            persisted += 1
+
+        report = {
+            "nodeId": n.node_id,
+            "definitionType": n.definition_type,
+            "changed": changed,
+            "changedFields": changed_fields,
+        }
+        if unsyncable:
+            report["unsyncable"] = True
+            report["reason"] = "no live material"
+        reports.append(report)
+
+    if req.dryRun:
+        await db.rollback()
+    else:
+        await db.commit()
+
+    return {
+        "workflowId": workflow_id,
+        "dryRun": req.dryRun,
+        "targetCount": len(targets),
+        "changedCount": persisted,
+        "nodes": reports,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import { healthApi } from '../../services/api';
 const navItems = [
   { path: '/', label: '대시보드', icon: '⌂', shortcut: '1' },
   { path: '/workflows', label: '업무자동화', icon: '◇', shortcut: '2' },
+  { path: '/workflows/generation-history', label: '∟ 생성 로그', icon: '🧾', shortcut: '', sub: true },
   { path: '/knowledge', label: '지식', icon: '📚', shortcut: '3', end: true },
   { path: '/knowledge/graph', label: '∟ 그래프', icon: '◈', shortcut: '', sub: true },
   { path: '/api-definitions', label: 'API 명세', icon: '🌐', shortcut: '4' },

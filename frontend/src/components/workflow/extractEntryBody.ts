@@ -9,6 +9,9 @@
  *   fallback: data 전체 (JSON.stringify)
  *
  * §7.2 B-2 정정 — v1 의 `markdown → data` 순서 오류를 수정.
+ *
+ * displayKey 지원 (markdown-viewer 전용):
+ *   resolveByDisplayKey(data, displayKey) — 점-경로 우선 탐색, 비어있으면 undefined 반환
  */
 
 export type EntryBodyKind = 'text' | 'json';
@@ -16,6 +19,39 @@ export type EntryBodyKind = 'text' | 'json';
 export interface EntryBody {
   kind: EntryBodyKind;
   content: string;
+}
+
+/**
+ * displayKey 가 지정된 경우 data 객체에서 해당 필드를 우선 탐색한다.
+ * - 점-경로 지원 (예: "a.b.c")
+ * - 값이 non-empty string → {kind:'text', content}
+ * - 값이 object/array → {kind:'json', content}
+ * - 필드 없음 / null / 빈 문자열 → undefined (caller 가 fallback)
+ */
+export function resolveByDisplayKey(
+  data: unknown,
+  displayKey: string,
+): EntryBody | undefined {
+  if (!displayKey || typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return undefined;
+  }
+  const parts = displayKey.split('.');
+  let cursor: unknown = data;
+  for (const part of parts) {
+    if (typeof cursor !== 'object' || cursor === null || Array.isArray(cursor)) {
+      return undefined;
+    }
+    cursor = (cursor as Record<string, unknown>)[part];
+  }
+  if (cursor === undefined || cursor === null) return undefined;
+  if (typeof cursor === 'string') {
+    return cursor.length > 0 ? { kind: 'text', content: cursor } : undefined;
+  }
+  if (typeof cursor === 'object') {
+    return { kind: 'json', content: JSON.stringify(cursor, null, 2) };
+  }
+  // number / boolean
+  return { kind: 'text', content: String(cursor) };
 }
 
 /**

@@ -25,6 +25,7 @@ class ApiCallHandler(NodeHandler):
         ctx: ExecutionContext,
     ) -> Any:
         config = node.config
+        snapshot = config.get("apiSpecSnapshot")
         api_def_id = config.get("apiDefinitionId")
         doc_id = config.get("docId")
 
@@ -36,8 +37,22 @@ class ApiCallHandler(NodeHandler):
         auth_config = {}
         api_parameters: List[Dict[str, Any]] = []
 
-        # 1. ApiDefinition DB에서 로드 (우선)
-        if api_def_id:
+        # 0. 동결된 스냅샷 우선 (snapshot-first; 라이브 DB 조회 생략)
+        if snapshot is not None:
+            if not isinstance(snapshot, dict):
+                raise ValueError("apiSpecSnapshot 이 올바른 형식이 아닙니다")
+            url_template = snapshot.get("urlTemplate")
+            if not url_template:
+                raise ValueError("apiSpecSnapshot 에 urlTemplate 이 없습니다")
+            method = snapshot.get("method") or "GET"
+            headers_raw = snapshot.get("headers") or {}
+            body_template = snapshot.get("bodyTemplate")
+            auth_type = snapshot.get("authType") or "none"
+            auth_config = snapshot.get("authConfig") or {}
+            api_parameters = snapshot.get("parameters") or []
+
+        # 1. ApiDefinition DB에서 로드 (스냅샷 없을 때 — 마이그레이션 이전 호환)
+        elif api_def_id:
             from ...models.api_definition import ApiDefinition
             async with async_session_maker() as api_db:
                 result = await api_db.execute(

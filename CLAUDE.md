@@ -8,9 +8,9 @@
 
 AI 업무도우미는 **ITO 담당자의 업무를 CLI 주도로 자동화하는 범용 백엔드 플랫폼**이다. 특정 도메인(GitHub 마일스톤, 코드정적분석, 티켓 분류 등)에 종속되지 않는다. CLI가 사용자와 대화하며 필요한 재료(지식문서, API 명세, 커스텀 AI 노드)를 등록하고, 범용 노드 11종을 조립하여 워크플로우를 구성한다.
 
-웹 UI는 실행 트리거와 결과 조회 전용 대시보드다. 편집·생성 기능은 웹 UI에 없다. 모든 조립과 수정은 CLI가 REST API를 직접 호출하여 수행한다.
+워크플로우 생성 경로는 **두 가지**다. (1) CLI가 REST API를 직접 호출해 조립, (2) **웹 업무자동화 메뉴의 "채팅으로 생성"** — 사용자가 자연어로 업무를 설명하면 **앱 백엔드가 LLM 게이트웨이(custom_api 등)를 호출해 단계적으로 워크플로우를 생성**한다(`POST /api/v1/workflows/generate`). 두 경로 모두 동일한 **결정론적 구조 검증 게이트**(§6.12)를 통과해야 저장된다. 그 외 재료(노드/API명세/인스턴스DB 메타) 생성·수정은 여전히 CLI 전용이며, 지식문서·워크플로우/인스턴스DB record 삭제는 웹 허용(§5.1).
 
-시스템은 항상 **제로 스타트**에서 출발한다. 사용자는 미리 명세 파일을 작성하지 않는다. CLI와 대화하며 필요한 재료를 점진적으로 등록하고 고도화한다.
+시스템은 항상 **제로 스타트**에서 출발한다. 사용자는 미리 명세 파일을 작성하지 않는다. CLI 또는 웹 채팅과 대화하며 필요한 재료를 점진적으로 등록하고 고도화한다.
 
 ---
 
@@ -30,7 +30,7 @@ AI 업무도우미는 **ITO 담당자의 업무를 CLI 주도로 자동화하는
 
 | 구성요소 | 설명 |
 |---------|------|
-| **워크플로우** | 노드와 연결의 집합. CLI가 REST API로 생성·수정. 웹은 조회·실행만 가능. |
+| **워크플로우** | 노드와 연결의 집합. CLI REST API 또는 웹 채팅 생성(`/workflows/generate`)으로 생성. 두 경로 모두 구조 검증 게이트 통과 필수. 웹은 조회·실행·채팅 생성 가능. |
 | **노드** | 워크플로우의 실행 단위. 범용 13종 중 선택하거나 커스텀 AI 노드(`ai-custom`)를 등록한다. |
 | **지식문서** | ChromaDB에 임베딩되는 마크다운 파일. `knowledge` 노드가 RAG 검색에 사용. |
 | **API 명세** | 외부 API의 URL/파라미터/응답 스키마를 등록한 레코드. `api-call`, `api-start`, `ai-api-router` 노드가 참조. |
@@ -121,9 +121,12 @@ GET http://localhost:8002/api/v1/nodes/catalog
 | POST | `/api/v1/api-definitions` | 외부 API 명세 등록 |
 | PUT | `/api/v1/api-definitions/{id}` | API 명세 수정 |
 | DELETE | `/api/v1/api-definitions/{id}` | API 명세 삭제 |
-| POST | `/api/v1/workflows` | 워크플로우 생성 (nodes + connections, position 없음) |
-| PUT/PATCH | `/api/v1/workflows/{id}` | 워크플로우 수정 |
+| POST | `/api/v1/workflows` | 워크플로우 생성 (nodes + connections, position 없음). **구조 검증 게이트 통과 필수** — errors 있으면 422 `WORKFLOW_INVALID` |
+| PUT/PATCH | `/api/v1/workflows/{id}` | 워크플로우 수정 (동일 검증 게이트 적용) |
 | DELETE | `/api/v1/workflows/{id}` | 워크플로우 삭제 |
+| POST | `/api/v1/workflows/validate` | **(미저장) 구조 사전 검증** — nodes+connections 받아 errors/warnings 리포트 반환 |
+| POST | `/api/v1/workflows/generate` | **(웹 채팅) 단계적 생성/편집** — `{description, mode, baseDraft?, history?}` → LLM 게이트웨이가 Plan→Assemble→Validate→Repair 루프로 draft 생성. `mode:"edit"` + `baseDraft`면 기존 draft 증분 수정(refine). `{draft, validation, assistantMessage, attempts, traceId}` 반환 (미저장) |
+| POST | `/api/v1/workflows/advise` | **결정론적 수정-제안** — `{nodes, connections}` → 규칙 기반 점검 결과 `{count, suggestions:[{severity, nodeName, message, suggestion}]}` 반환. `suggestion`은 채팅에 넣을 수정 지시문 (LLM 미사용) |
 
 ### 5.2 실행·조회 (웹·CLI 공통)
 
@@ -140,7 +143,13 @@ GET http://localhost:8002/api/v1/nodes/catalog
 | GET | `/api/v1/api-definitions` | API 명세 목록 |
 | POST | `/api/v1/api-definitions/{id}/probe` | **API 실행 + 응답 스키마 자동 저장** → `mappablePaths` (input_mapping 경로 목록) + `arrayGuide` 반환 |
 | POST | `/api/v1/workflows/{id}/validate-flow` | 실행 전 데이터 흐름 정적 검증 → null 리스크 `issues` 목록 반환 |
+| GET | `/api/v1/workflows/{id}/generation-traces` | 해당 워크플로우 생성·편집 시의 채팅 Q&A 이력(오래된→최신) 조회. 편집 모드에서 복원에 사용 |
 | GET | `/api/v1/dashboard/summary` | 대시보드 집계 — `{counts: {todayRuns, inProgress, failed, completed}, workflows: [{...latestInstance}]}` |
+| GET | `/api/v1/blueprint/workflows/{id}` | 워크플로우 설계도(blueprint) 추출 — 스냅샷 동결 상태 포함, 재료(환경값)는 redact |
+| POST | `/api/v1/blueprint/import` | 설계도 가져오기(이식) — `{blueprint, dryRun?}` → 결정론 재생 후 `{workflowId, reconciliation}` 반환 (dryRun이면 `{plan, reconciliation}`) |
+| POST | `/api/v1/blueprint/workflows/{id}/fill-materials` | 보정: 재료값 입력 — `{values:[{nodeRef, path, value}]}` |
+| POST | `/api/v1/blueprint/workflows/{id}/knowledge-remap` | 보정: 지식 카테고리 재매핑 — `{remaps:[{nodeRef, from, to}]}` |
+| POST | `/api/v1/workflows/{id}/resync-snapshots` | 재동기화 — `{nodeIds?, dryRun?}` 원본 API 명세·AI노드 스펙을 다시 스냅샷 동결 |
 
 ### 5.3 인스턴스DB CRUD (CLI 전용)
 
@@ -178,6 +187,12 @@ GET http://localhost:8002/api/v1/nodes/catalog
 9. **노드별 timeout 존재**: ai-custom=600s, api-call=60s, knowledge=30s, 기본=300s. timeout 초과 시 노드 상태가 `failed`로 기록된다.
 10. **지식 웹 편집 허용** (2026-05-14): 지식 페이지(`/knowledge`)에서 카테고리/태그/제목/본문 인라인 편집·신규 등록·삭제 가능. 다른 재료(노드/API명세/워크플로우)는 CLI 전용 정책 유지. 지식은 ChromaDB 재임베딩이 PUT 시 자동 처리되므로 웹 편집 시 추가 조치 불필요.
 11. **첫 세팅 시 ONNX 모델 사전 확인**: clone 직후 세팅을 AI 가 진행할 때, ONNX 임베딩 모델(`backend/models/onnx/`)은 git 에 포함되지 않으므로 **세팅 자동 진행 전 반드시 사용자에게 "ONNX 모델이 준비되어 있습니까?"를 먼저 확인**한다. 미준비 시 진행을 중단하고 모델 확보 방법(사외망 다운로드 후 복사 / 사내 모델 저장소)을 사용자와 합의한 뒤 진행한다. (글로벌 `feedback_ask_before_workaround` 정책과 동일 취지)
+12. **[필수] 워크플로우 구조 검증 게이트** (2026-06-02): 모든 워크플로우 생성·수정은 `app/services/workflow_validator.py`의 `validate_workflow_structure`를 통과해야 저장된다. **노드 배치·구성은 AI 판단**이지만, 검증은 **결정론적 프로세스**로 강제한다. ERROR(생성 차단): 단절 노드(E2)·도달 불가(E4)·끊긴 엣지(E1)·트리거 없음(E3)·미지 defType(E5)·필수 config 누락(E6)·존재하지 않는 참조ID(E7)·sorter 핸들 불일치(E8)·순환(E9). WARNING(허용·보고): 매핑 null 리스크(W1)·타입 불일치(W2)·dead-end(W3)·분리 그래프(W4). 카탈로그(`nodes/catalog.py`)가 검증의 SSoT다.
+13. **웹 채팅 생성 파이프라인** (2026-06-02): `app/services/workflow_generator.py`가 `get_llm_handler()`(환경변수 자동 선택, 폐쇄망=custom_api)로 LLM을 호출해 **Plan→Assemble→Validate→Repair(최대 3회) 루프**로 생성한다. 노드/연결 id는 LLM이 준 값을 신뢰하지 않고 **항상 서버가 전역 고유 id(`wn-`/`wc-`)로 재부여**한다(LLM이 예시 id를 복사해 PK 충돌하는 문제 방지). config의 참조 ID(`apiDefinitionId`/`instanceDbId`/`aiNodeId`/`warehouseNodeId`)는 반드시 실제 등록된 재료만 사용하며, 재료가 없으면 환각 ID 대신 해당 노드를 생략하고 사용자에게 안내한다. sorter 핸들/자기순환은 `_normalize_sorter_wiring`으로 **결정론적 후처리 교정**한다.
+14. **웹 채팅 편집 모드 + 수정-제안** (2026-06-04): 완성된 워크플로우도 웹에서 **채팅으로 편집** 가능(`/workflows/:id/edit` → `generate(mode:"edit", baseDraft)` 증분 수정 → **`PATCH /workflows/{id}`로 같은 id에 저장-백**, 동일 검증 게이트 적용). 편집 진입은 상세 페이지 "✏️ 편집" 버튼. **결정론적 수정-제안(advisor)** `app/services/workflow_advisor.py`가 config 품질 문제(이력에 dedup 키만 저장·POST 본문 변수 누락·프롬프트 미존재 필드 참조·검증 경고 흡수 등)를 점검해 `suggestion`(채팅 수정 지시문)을 제시한다. 사용자는 제안을 채팅으로 보내 refine로 반영한다. (LLM 미사용, 폐쇄망 친화)
+15. **워크플로우 생성 채팅 이력 보존 + 편집 모드 복원** (2026-06-05): 워크플로우 생성·수정 시 LLM 게이트웨이와의 Q&A 이력(생성 추적)을 JSONL 파일로 저장하고, 같은 워크플로우의 `generationTraceIds` 필드에 링크한다. 편집 모드에서 `GET /workflows/{id}/generation-traces`로 이전 대화를 조회·재생하여 UI에 "──이전 대화──" 섹션으로 표시한다. 저장소 재설계 필요 없이 기존 생성 추적 JSONL을 재활용하므로 새 테이블 불필요.
+16. **전용 인스턴스DB 우선 생성 + viewerHints 지정** (2026-06-05): 워크플로우가 **새로운 종류의 레코드**를 `instance-db-insert`로 적재할 때는, 기존의 무관한 인스턴스DB를 재사용하지 말고 먼저 `POST /api/v1/instance-dbs`로 **용도 전용 인스턴스DB를 생성**한 뒤 노드를 연결한다. 전용 DB에는 반드시 **`viewerHints`를 레코드 필드에 맞게 지정**한다 — 특히 마크다운 본문 필드는 `{"<field>": "markdown"}`으로 지정해야 웹 인스턴스DB 화면에서 JSON 통짜가 아니라 렌더링된 마크다운으로 표시된다. viewerHints가 안 맞으면 적재된 레코드가 의미 불명의 JSON 덤프로 표시되고, 서로 다른 업무의 레코드가 한 DB에 섞여 운영·조회가 어려워진다.
+17. **워크플로우 설계도(blueprint) 추출·이식 + 스냅샷 동결** (2026-06-05): 워크플로우는 저장 시 참조한 API 명세·커스텀 AI노드 스펙을 노드 config에 **스냅샷 동결**(`apiSpecSnapshot`/`apiSpecSnapshots`/`aiNodeSnapshot`)한다. 런타임은 스냅샷으로 실행(없으면 live 폴백). 설계도(blueprint)는 `GET /api/v1/blueprint/workflows/{id}`로 추출하는 **설계만 담은 자체 포함 문자열**로, 스냅샷·노드·연결·배선은 유지하되 환경값(API 인증·defaultParams·헤더 민감값)은 `redactedFields` 매니페스트로 mask 처리된다. 인스턴스DB는 메타(name/viewerHints)만 스냅샷, 레코드는 미복사. **지식은 live 의존** (스냅샷 없음). 가져오기(`POST /api/v1/blueprint/import`)는 **결정론적 재생**(새 id `wn-`/`wc-` 부여)으로 인스턴스DB 이름 재매칭·무관한 레지스트리 오염 방지 후 **보정(reconciliation) 단계**(`fill-materials`/`knowledge-remap`)로 재료값·지식 연결 완료. 재동기화(`POST /api/v1/workflows/{id}/resync-snapshots`)로 원본 재료 변경 후 스냅샷만 다시 동결 가능.
 
 ---
 

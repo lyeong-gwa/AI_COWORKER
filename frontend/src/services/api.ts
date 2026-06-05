@@ -555,6 +555,53 @@ export const nodeApi = {
 
 import type { Workflow, WorkflowDeletePreview, WorkflowScheduleConfig, WorkflowScheduleUpdateResponse, WorkflowScheduleNextRun } from '../types';
 
+// ─── Workflow Generate / Validate 타입 ───────────────────────────────────────
+
+export interface ValidationIssue {
+  code: string;
+  severity: 'error' | 'warning';
+  nodeId?: string;
+  nodeName?: string;
+  message: string;
+}
+
+export interface ValidationReport {
+  valid: boolean;
+  errorCount: number;
+  warningCount: number;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+}
+
+export interface GenerateResult {
+  draft: {
+    name: string;
+    description: string;
+    tags: string[];
+    nodes: Array<{
+      id: string;
+      nodeId: string;
+      definitionType: string;
+      name: string;
+      config?: Record<string, unknown>;
+      inputMapping?: Record<string, string>;
+    }>;
+    connections: Array<{
+      id: string;
+      sourceNodeId: string;
+      targetNodeId: string;
+      sourceHandle?: string;
+      targetHandle?: string;
+    }>;
+  };
+  validation: ValidationReport;
+  assistantMessage: string;
+  attempts: number;
+  stages: unknown[];
+  /** 생성 트레이스 ID (서버가 기록한 경우) */
+  traceId?: string;
+}
+
 export interface CreateWorkflowData {
   name: string;
   description?: string;
@@ -569,6 +616,7 @@ export interface CreateWorkflowData {
     aiNodeId?: string;
     name: string;
     orderIndex?: number;
+    config?: Record<string, unknown>;
     configOverrides?: Record<string, unknown>;
     inputMapping?: Record<string, string>;
   }>;
@@ -576,12 +624,34 @@ export interface CreateWorkflowData {
     id: string;
     sourceNodeId: string;
     targetNodeId: string;
+    sourceHandle?: string;
+    targetHandle?: string;
     condition?: { field: string; operator: string; value: unknown };
   }>;
+  /** 이 워크플로우를 생성/편집할 때 연관된 generation trace ID 목록 */
+  generationTraceIds?: string[];
 }
 
 export interface UpdateWorkflowData extends Partial<CreateWorkflowData> {
   status?: 'draft' | 'active' | 'paused' | 'archived';
+}
+
+// ─── 워크플로우 채팅 히스토리 (generation traces per workflow) ────────────────
+
+/**
+ * GET /workflows/{id}/generation-traces 의 각 항목.
+ * oldest → newest 순으로 정렬되어 반환됨.
+ */
+export interface WorkflowChatTurn {
+  traceId: string;
+  createdAt: string;
+  mode: 'create' | 'edit';
+  userMessage: string;
+  assistantMessage: string;
+  attempts: number;
+  result: string;
+  errorCount: number;
+  warningCount: number;
 }
 
 export interface WorkflowSummary {
@@ -729,7 +799,65 @@ export const workflowApi = {
   /** 즉시 실행 — POST /ops/scheduler/trigger/{wfId} */
   triggerNow: (wfId: string): Promise<{ message: string; workflowId: string; instanceId?: string }> =>
     request(`/ops/scheduler/trigger/${wfId}`, { method: 'POST' }),
+
+  /** 채팅 설명으로 워크플로우 드래프트 생성 — POST /workflows/generate */
+  generate: (body: {
+    description: string;
+    mode?: 'create' | 'edit' | 'refine';
+    baseWorkflowId?: string;
+    history?: Array<{ role: string; content: string }>;
+    baseDraft?: GenerateResult['draft'] | null;
+  }): Promise<GenerateResult> =>
+    request('/workflows/generate', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** 워크플로우 구조 검증 — POST /workflows/validate */
+  validate: (body: {
+    nodes: Array<Record<string, unknown>>;
+    connections: Array<Record<string, unknown>>;
+  }): Promise<ValidationReport> =>
+    request('/workflows/validate', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** 워크플로우 수정 제안 — POST /workflows/advise */
+  advise: (body: { nodes: any[]; connections: any[] }): Promise<AdviseResult> =>
+    request('/workflows/advise', { method: 'POST', body: JSON.stringify(body) }),
+
+  /**
+   * 워크플로우에 연결된 생성 대화 히스토리 조회 — GET /workflows/{id}/generation-traces
+   * oldest → newest 순 WorkflowChatTurn[] 반환.
+   */
+  getChatHistory: (id: string): Promise<WorkflowChatTurn[]> =>
+    request(`/workflows/${id}/generation-traces`),
+
+  /**
+   * 스냅샷 재동기화 — POST /workflows/{id}/resync-snapshots
+   * dryRun=true → 변경 미리보기 (적용 없음)
+   * dryRun=false → 실제 적용
+   */
+  resyncSnapshots: (
+    id: string,
+    params?: { nodeIds?: string[]; dryRun?: boolean },
+  ): Promise<{ nodes: Array<{ nodeId: string; definitionType: string; changed: boolean; changedFields: string[]; unsyncable?: boolean; reason?: string }> }> =>
+    request(`/workflows/${id}/resync-snapshots`, {
+      method: 'POST',
+      body: JSON.stringify(params ?? {}),
+    }),
 };
+
+// ─── Advise 타입 ─────────────────────────────────────────────────────────────
+
+export interface WorkflowSuggestion {
+  code: string;
+  severity: 'warning' | 'info';
+  nodeId?: string | null;
+  nodeName?: string | null;
+  message: string;
+  suggestion: string;
+}
+
+export interface AdviseResult {
+  count: number;
+  suggestions: WorkflowSuggestion[];
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Warehouse / Instance API (Phase 2b)
@@ -1052,6 +1180,95 @@ export const exportImportApi = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Generation Trace API (워크플로우 생성 히스토리)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface GenerationTraceSummary {
+  traceId: string;
+  createdAt: string;
+  mode: string;
+  description: string;
+  attempts: number;
+  result: 'valid' | 'invalid' | 'error';
+  errorCount: number;
+  warningCount: number;
+  nodeCount: number;
+}
+
+export interface ValidationIssueDetail {
+  code: string;
+  severity: 'error' | 'warning';
+  nodeId?: string;
+  nodeName?: string;
+  message: string;
+}
+
+export interface LlmCall {
+  callType: string;
+  systemPrompt: string;
+  prompt: string;
+  response: string;
+  tokenUsage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  durationMs: number;
+  ok: boolean;
+}
+
+export interface ValidationAttempt {
+  attempt: number;
+  valid: boolean;
+  errorCount: number;
+  warningCount: number;
+  errors: ValidationIssueDetail[];
+  warnings: ValidationIssueDetail[];
+}
+
+export interface GenerationTraceDetail {
+  traceId: string;
+  createdAt: string;
+  mode: string;
+  description: string;
+  baseDraftProvided: boolean;
+  materialsSummaryChars: number;
+  llmCalls: LlmCall[];
+  validationHistory: ValidationAttempt[];
+  finalDraft: {
+    name: string;
+    description: string;
+    nodes: Array<{
+      definitionType: string;
+      name: string;
+      config?: Record<string, unknown>;
+      [key: string]: unknown;
+    }>;
+    connections: Array<Record<string, unknown>>;
+  } | null;
+  finalValidation: {
+    valid: boolean;
+    errorCount: number;
+    warningCount: number;
+    errors: ValidationIssueDetail[];
+    warnings: ValidationIssueDetail[];
+  } | null;
+  attempts: number;
+  result: 'valid' | 'invalid' | 'error';
+  error?: string;
+}
+
+export const generationTraceApi = {
+  /** 생성 트레이스 목록 조회 */
+  list: (limit = 50): Promise<GenerationTraceSummary[]> =>
+    request(`/workflows/generation-traces?limit=${limit}`),
+
+  /** 생성 트레이스 상세 조회 */
+  get: (traceId: string): Promise<GenerationTraceDetail> =>
+    request(`/workflows/generation-traces/${traceId}`),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Dashboard API (Phase 4c)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1094,6 +1311,156 @@ export const dashboardApi = {
    */
   getSummary: (): Promise<DashboardSummary> =>
     request('/dashboard/summary'),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Blueprint API (Phase 9 — 설계도 내보내기/가져오기/보정/재동기화)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Blueprint types ────────────────────────────────────────────────────────
+
+export interface BlueprintRedactedField {
+  nodeRef: string;
+  path: string;
+  kind: string;
+}
+
+export interface BlueprintDependencies {
+  instanceDbs: Array<{ localId: string; name: string }>;
+  knowledge: Array<{ category: string }>;
+}
+
+export interface Blueprint {
+  blueprintVersion: string;
+  kind: string;
+  exportedAt: string;
+  sourceWorkflowId: string;
+  workflow: Record<string, unknown>;
+  dependencies: BlueprintDependencies;
+  redactedFields: BlueprintRedactedField[];
+}
+
+// ── Reconciliation types ───────────────────────────────────────────────────
+
+export interface ReconciliationKnowledgeItem {
+  nodeRef: string;
+  requirement: string;
+  status: 'satisfied' | 'partial' | 'missing';
+  missingCategories: string[];
+  availableCategories: string[];
+  suggestedActions: string[];
+}
+
+export interface ReconciliationMaterialToFill {
+  nodeRef: string;
+  path: string;
+  kind: string;
+}
+
+export interface ReconciliationWarning {
+  kind: string;
+  message: string;
+  nodeRef?: string;
+}
+
+export interface ReconciliationSummary {
+  knowledge: {
+    satisfied: number;
+    partial: number;
+    missing: number;
+  };
+  materialsToFill: number;
+  warnings: number;
+}
+
+export interface Reconciliation {
+  summary: ReconciliationSummary;
+  knowledge: ReconciliationKnowledgeItem[];
+  materialsToFill: ReconciliationMaterialToFill[];
+  warnings: ReconciliationWarning[];
+}
+
+// ── Import plan types ──────────────────────────────────────────────────────
+
+export interface ImportPlanInstanceDb {
+  name: string;
+  action: 'reuse' | 'create';
+  localId: string;
+}
+
+export interface ImportPlan {
+  nodeIdRemap: Record<string, string>;
+  instanceDbs: ImportPlanInstanceDb[];
+  nodeCount: number;
+  connectionCount: number;
+}
+
+// ── Import response types ──────────────────────────────────────────────────
+
+export interface ImportDryRunResult {
+  plan: ImportPlan;
+  reconciliation: Reconciliation;
+}
+
+export interface ImportCommitResult {
+  workflowId: string;
+  reconciliation: Reconciliation;
+}
+
+export type ImportResult2 = ImportDryRunResult | ImportCommitResult;
+
+// ── Resync types ───────────────────────────────────────────────────────────
+
+export interface ResyncNodeResult {
+  nodeId: string;
+  definitionType: string;
+  changed: boolean;
+  changedFields: string[];
+  unsyncable?: boolean;
+  reason?: string;
+}
+
+export interface ResyncReport {
+  nodes: ResyncNodeResult[];
+}
+
+// ── API client ─────────────────────────────────────────────────────────────
+
+export const blueprintApi = {
+  /** 워크플로우 설계도 내보내기 — GET /blueprint/workflows/{id} */
+  export: (id: string): Promise<Blueprint> =>
+    request(`/blueprint/workflows/${id}`),
+
+  /**
+   * 설계도 가져오기 — POST /blueprint/import
+   * dryRun=true → ImportDryRunResult
+   * dryRun=false (기본) → ImportCommitResult
+   */
+  import: (blueprint: Blueprint | string, dryRun?: boolean): Promise<ImportDryRunResult | ImportCommitResult> =>
+    request('/blueprint/import', {
+      method: 'POST',
+      body: JSON.stringify({ blueprint, dryRun }),
+    }),
+
+  /** 재료값 채우기 — POST /blueprint/workflows/{id}/fill-materials */
+  fillMaterials: (
+    id: string,
+    values: Array<{ nodeRef: string; path: string; value: string }>,
+  ): Promise<Reconciliation> =>
+    request(`/blueprint/workflows/${id}/fill-materials`, {
+      method: 'POST',
+      body: JSON.stringify({ values }),
+    }),
+
+  /** 지식 카테고리 재매핑 — POST /blueprint/workflows/{id}/knowledge-remap */
+  knowledgeRemap: (
+    id: string,
+    remaps: Array<{ nodeRef: string; from: string; to: string }>,
+  ): Promise<Reconciliation> =>
+    request(`/blueprint/workflows/${id}/knowledge-remap`, {
+      method: 'POST',
+      body: JSON.stringify({ remaps }),
+    }),
 };
 
 // Export error class

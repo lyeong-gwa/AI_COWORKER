@@ -109,6 +109,9 @@ class WorkflowCreate(WorkflowBase):
     createdBy: str = Field(default="cli")  # 'cli' | 'web'
     nodes: List[WorkflowNodeCreate] = Field(default_factory=list)
     connections: List[WorkflowConnectionCreate] = Field(default_factory=list)
+    # 이 워크플로우를 생성한 채팅 추적(generation trace) id 목록.
+    # 모델 컬럼 generation_trace_ids 로 매핑된다. 생략 시 빈 리스트.
+    generationTraceIds: List[str] = Field(default_factory=list)
 
 
 class WorkflowUpdate(BaseModel):
@@ -121,6 +124,9 @@ class WorkflowUpdate(BaseModel):
     variables: Optional[Dict[str, Any]] = None
     nodes: Optional[List[WorkflowNodeCreate]] = None
     connections: Optional[List[WorkflowConnectionCreate]] = None
+    # 새로 추가할 채팅 추적 id 목록. 제공 시 기존 목록에 순서 보존·중복 제거로 append 된다.
+    # 생략(None) 하면 기존 목록을 보존한다.
+    generationTraceIds: Optional[List[str]] = None
 
 
 class WorkflowResponse(BaseModel):
@@ -135,6 +141,9 @@ class WorkflowResponse(BaseModel):
     createdBy: str = Field(default="cli", serialization_alias="createdBy")
     nodes: List[WorkflowNodeResponse]
     connections: List[WorkflowConnectionResponse]
+    generationTraceIds: List[str] = Field(
+        default_factory=list, serialization_alias="generationTraceIds"
+    )
     createdAt: datetime = Field(serialization_alias="createdAt")
     updatedAt: datetime = Field(serialization_alias="updatedAt")
 
@@ -256,3 +265,28 @@ class FactoryMapUpdate(BaseModel):
     """팩토리 맵 업데이트"""
     nodes: Optional[List[WorkflowNodeCreate]] = None
     connections: Optional[List[WorkflowConnectionCreate]] = None
+
+
+class WorkflowValidateRequest(BaseModel):
+    """워크플로우 구조 사전 검증 요청 (POST /workflows/validate).
+
+    저장 없이 nodes + connections 만 받아 validate_workflow_structure 를 실행한다.
+    """
+    nodes: List[WorkflowNodeCreate] = Field(default_factory=list)
+    connections: List[WorkflowConnectionCreate] = Field(default_factory=list)
+
+
+class WorkflowGenerateRequest(BaseModel):
+    """워크플로우 자동 생성 요청 (POST /workflows/generate).
+
+    사용자 자연어 설명으로부터 draft를 생성한다. 저장은 하지 않는다.
+    baseDraft가 있거나 mode in ('edit','refine')이면 수정 모드로 동작.
+    """
+    description: str = Field(..., min_length=1, description="자동화하려는 업무를 자연어로 설명")
+    mode: str = Field(default="create", description="'create' (신규) | 'edit'/'refine' (기존 수정)")
+    baseWorkflowId: Optional[str] = Field(default=None, description="mode='edit'일 때 기준 워크플로우 ID")
+    history: Optional[List[Any]] = Field(default=None, description="대화 이력 (수정 모드 컨텍스트용)")
+    baseDraft: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="수정 모드에서 기준이 되는 현재 워크플로우 draft JSON (nodes/connections/name/description 포함)",
+    )

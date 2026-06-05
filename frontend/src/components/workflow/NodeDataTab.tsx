@@ -25,7 +25,7 @@ import {
 } from '../../services/api';
 import { JsonTreeView } from '../common/JsonTreeView';
 import { StyledMarkdown } from '../common/StyledMarkdown';
-import { extractEntryBody } from './extractEntryBody';
+import { extractEntryBody, resolveByDisplayKey } from './extractEntryBody';
 
 const LEGACY_DEF_TYPE_MAP: Record<string, string> = { form: 'form-start' };
 
@@ -65,7 +65,14 @@ export function NodeDataTab({ node, workflow, instance, pageContext, onWarehouse
     case 'result':
       return <WarehouseDataTab nodeId={node.id} renderMode="pre" onWarehouseTotalFetched={onWarehouseTotalFetched} />;
     case 'markdown-viewer':
-      return <WarehouseDataTab nodeId={node.id} renderMode="markdown" onWarehouseTotalFetched={onWarehouseTotalFetched} />;
+      return (
+        <WarehouseDataTab
+          nodeId={node.id}
+          renderMode="markdown"
+          displayKey={config.displayKey as string | undefined}
+          onWarehouseTotalFetched={onWarehouseTotalFetched}
+        />
+      );
     case 'instance-db-insert':
       return (
         <InstanceDbDataTab
@@ -494,10 +501,12 @@ type WarehouseRenderMode = 'pre' | 'markdown';
 function WarehouseDataTab({
   nodeId,
   renderMode,
+  displayKey,
   onWarehouseTotalFetched,
 }: {
   nodeId: string;
   renderMode: WarehouseRenderMode;
+  displayKey?: string;
   onWarehouseTotalFetched?: (nodeId: string, total: number) => void;
 }) {
   const [items, setItems] = useState<WarehouseInstanceEntry[]>([]);
@@ -549,7 +558,7 @@ function WarehouseDataTab({
         <DataEmpty message="적재된 데이터가 없습니다. 워크플로우를 실행하면 데이터가 생성됩니다." />
       ) : (
         <>
-          <WarehouseEntryList items={items} renderMode={renderMode} />
+          <WarehouseEntryList items={items} renderMode={renderMode} displayKey={displayKey} />
           <Paginator
             page={page}
             total={total}
@@ -568,9 +577,11 @@ function WarehouseDataTab({
 function WarehouseEntryList({
   items,
   renderMode,
+  displayKey,
 }: {
   items: WarehouseInstanceEntry[];
   renderMode: WarehouseRenderMode;
+  displayKey?: string;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -581,6 +592,7 @@ function WarehouseEntryList({
           key={item.id}
           item={item}
           renderMode={renderMode}
+          displayKey={displayKey}
           expanded={expandedId === item.id}
           onToggle={() => setExpandedId((id) => (id === item.id ? null : item.id))}
         />
@@ -592,15 +604,26 @@ function WarehouseEntryList({
 function WarehouseEntryRow({
   item,
   renderMode,
+  displayKey,
   expanded,
   onToggle,
 }: {
   item: WarehouseInstanceEntry;
   renderMode: WarehouseRenderMode;
+  displayKey?: string;
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const body = extractEntryBody(item.data);
+  // For markdown-viewer with displayKey, default tab is 'preview'. Otherwise always show raw as before.
+  const isMarkdownViewer = renderMode === 'markdown' && !!displayKey;
+  const [viewTab, setViewTab] = useState<'preview' | 'raw'>(isMarkdownViewer ? 'preview' : 'raw');
+
+  // Resolve body: if displayKey is provided, try it first; fallback to standard extraction.
+  const resolvedBody = displayKey
+    ? resolveByDisplayKey(item.data, displayKey)
+    : undefined;
+  const body = resolvedBody ?? extractEntryBody(item.data);
+
   const dateStr = item.createdAt ? new Date(item.createdAt).toLocaleString('ko-KR') : '—';
   const summaryText =
     body.kind === 'text'
@@ -629,15 +652,66 @@ function WarehouseEntryRow({
       </button>
       {expanded && (
         <div className="border-t border-slate-800/60">
-          <WarehouseBodyRender body={body} renderMode={renderMode} />
-          <div className="px-3 pb-2 pt-1 border-t border-slate-800/40">
-            <div className="text-[9px] font-semibold text-gray-600 uppercase tracking-wider mb-1">
-              Raw JSON
+          {/* Preview / Raw JSON toggle — only shown for markdown-viewer with displayKey */}
+          {isMarkdownViewer && (
+            <div className="flex items-center gap-1 px-3 pt-2 pb-1">
+              <button
+                onClick={() => setViewTab('preview')}
+                className={`text-[10px] px-2 py-0.5 rounded font-medium transition-colors ${
+                  viewTab === 'preview'
+                    ? 'bg-slate-700 text-slate-100'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                프리뷰
+              </button>
+              <button
+                onClick={() => setViewTab('raw')}
+                className={`text-[10px] px-2 py-0.5 rounded font-medium transition-colors ${
+                  viewTab === 'raw'
+                    ? 'bg-slate-700 text-slate-100'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                Raw JSON
+              </button>
             </div>
-            <div className="bg-slate-900 rounded p-2">
-              <JsonTreeView data={item.data} maxDepth={1} />
+          )}
+
+          {/* Preview section */}
+          {(!isMarkdownViewer || viewTab === 'preview') && (
+            <>
+              {isMarkdownViewer && !resolvedBody ? (
+                <div className="px-3 py-2 text-[11px] text-amber-400/80 italic">
+                  displayKey '{displayKey}' 필드를 찾을 수 없습니다 — Raw JSON으로 표시
+                </div>
+              ) : null}
+              {(!isMarkdownViewer || resolvedBody) && (
+                <WarehouseBodyRender body={body} renderMode={renderMode} />
+              )}
+              {isMarkdownViewer && !resolvedBody && (
+                <div className="px-3 pb-2">
+                  <div className="bg-slate-900 rounded p-2">
+                    <JsonTreeView data={item.data} maxDepth={1} />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Raw JSON section */}
+          {(!isMarkdownViewer || viewTab === 'raw') && (
+            <div className="px-3 pb-2 pt-1 border-t border-slate-800/40">
+              {!isMarkdownViewer && (
+                <div className="text-[9px] font-semibold text-gray-600 uppercase tracking-wider mb-1">
+                  Raw JSON
+                </div>
+              )}
+              <div className="bg-slate-900 rounded p-2">
+                <JsonTreeView data={item.data} maxDepth={1} />
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

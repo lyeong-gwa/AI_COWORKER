@@ -149,6 +149,32 @@ class AiCustomHandler(NodeHandler):
                     await queue_db.commit()
             raise
 
+    @staticmethod
+    def _ai_node_from_snapshot(snap: Any) -> AINode:
+        """aiNodeSnapshot dict → 세션에 추가하지 않는 transient AINode.
+
+        execute_node 는 전달된 AINode 객체의 속성만 사용하고 id 로 재조회하지 않으므로
+        transient 객체로 안전하게 실행 가능하다. 불완전한 스냅샷은 ValueError.
+        """
+        if not isinstance(snap, dict):
+            raise ValueError("aiNodeSnapshot 이 올바른 형식이 아닙니다")
+        user_prompt_template = snap.get("userPromptTemplate")
+        if user_prompt_template is None:
+            raise ValueError("aiNodeSnapshot 에 userPromptTemplate 이 없습니다")
+        default_schema = {"type": "object", "properties": {}, "required": []}
+        return AINode(
+            id=snap.get("id") or "",
+            name=snap.get("name") or "",
+            description=snap.get("description") or "",
+            system_prompt=snap.get("systemPrompt") or "",
+            user_prompt_template=user_prompt_template,
+            input_schema=snap.get("inputSchema") or dict(default_schema),
+            output_schema=snap.get("outputSchema") or dict(default_schema),
+            output_enforcement=snap.get("outputEnforcement") or {},
+            llm_config=snap.get("llmConfig") or {},
+            is_active=True,
+        )
+
     async def _execute_ai_node(
         self,
         node: Any,
@@ -157,41 +183,49 @@ class AiCustomHandler(NodeHandler):
         ctx: ExecutionContext,
     ) -> Dict:
         """AI 노드 실행"""
-        # 커스텀 AI 노드인 경우 연결된 AINode 사용
-        if node.ai_node_id:
+        # 우선순위: aiNodeSnapshot(동결) > 라이브 AINode(ai_node_id) > config 내 prompt
+        ai_node = None
+
+        # 1. 동결된 스냅샷 우선 (snapshot-first; 라이브 DB 조회 생략)
+        snapshot = config.get("aiNodeSnapshot")
+        if snapshot is not None:
+            ai_node = self._ai_node_from_snapshot(snapshot)
+
+        # 2. 라이브 AINode 조회 (스냅샷 없을 때 — 마이그레이션 이전 호환)
+        elif node.ai_node_id:
             result = await ctx.db.execute(
                 select(AINode).where(AINode.id == node.ai_node_id)
             )
             ai_node = result.scalar_one_or_none()
 
-            if ai_node:
-                # input_schema 기반 자동 타입 변환
-                coerced_input = dict(input_data)
-                schema_props = (ai_node.input_schema or {}).get("properties", {})
-                for key in list(coerced_input.keys()):
-                    val = coerced_input[key]
-                    expected_type = schema_props.get(key, {}).get("type")
-                    # dict/list → JSON 문자열 변환 (스키마가 string을 기대하는 경우)
-                    if isinstance(val, (dict, list)) and expected_type == "string":
-                        coerced_input[key] = json.dumps(val, ensure_ascii=False, default=str)
-                    # None → 스키마 타입에 맞는 기본값 변환
-                    elif val is None and expected_type:
-                        if expected_type == "string":
-                            coerced_input[key] = ""
-                        elif expected_type == "array":
-                            coerced_input[key] = []
-                        elif expected_type == "object":
-                            coerced_input[key] = {}
+        if ai_node is not None:
+            # input_schema 기반 자동 타입 변환
+            coerced_input = dict(input_data)
+            schema_props = (ai_node.input_schema or {}).get("properties", {})
+            for key in list(coerced_input.keys()):
+                val = coerced_input[key]
+                expected_type = schema_props.get(key, {}).get("type")
+                # dict/list → JSON 문자열 변환 (스키마가 string을 기대하는 경우)
+                if isinstance(val, (dict, list)) and expected_type == "string":
+                    coerced_input[key] = json.dumps(val, ensure_ascii=False, default=str)
+                # None → 스키마 타입에 맞는 기본값 변환
+                elif val is None and expected_type:
+                    if expected_type == "string":
+                        coerced_input[key] = ""
+                    elif expected_type == "array":
+                        coerced_input[key] = []
+                    elif expected_type == "object":
+                        coerced_input[key] = {}
 
-                from ...services.node_executor import execute_node
-                exec_result = await execute_node(
-                    node=ai_node,
-                    input_data=coerced_input,
-                    db=ctx.db,
-                )
-                return exec_result.output if exec_result.success else {"error": exec_result.error}
+            from ...services.node_executor import execute_node
+            exec_result = await execute_node(
+                node=ai_node,
+                input_data=coerced_input,
+                db=ctx.db,
+            )
+            return exec_result.output if exec_result.success else {"error": exec_result.error}
 
-        # 기본 AI 노드 설정 사용
+        # 3. 기본 AI 노드 설정 사용 (config 내 prompt)
         from ...services.llm_client import call_llm
 
         prompt = config.get('prompt', '')

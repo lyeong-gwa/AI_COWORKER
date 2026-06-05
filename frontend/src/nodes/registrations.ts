@@ -12,6 +12,7 @@ import { MapperNode } from '../components/workflow/MapperNode';
 import { KnowledgeNode } from '../components/workflow/KnowledgeNode';
 import { MarkdownViewerNode } from '../components/workflow/MarkdownViewerNode';
 import { AiApiRouterNode } from '../components/workflow/AiApiRouterNode';
+import { InstanceDbInsertNode } from '../components/workflow/InstanceDbInsertNode';
 
 import { DEF_TYPE } from '../constants/workflow';
 
@@ -308,7 +309,7 @@ nodeRegistry.register({
   defType: DEF_TYPE.INSTANCE_DB_INSERT,
   category: 'action',
   reactFlowType: 'instanceDbInsertNode',
-  component: FactoryNode,
+  component: InstanceDbInsertNode,
   minimapColor: '#0f766e',
   palette: {
     icon: '📥',

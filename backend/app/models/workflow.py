@@ -82,6 +82,13 @@ class Workflow(Base):
     # 워크플로우 생성 주체 ('cli' | 'web')
     created_by: Mapped[str] = mapped_column(String(20), default='cli', nullable=False)
 
+    # 이 워크플로우를 만들어낸 채팅 생성 추적(generation trace) id 목록.
+    # 채팅으로 생성/편집할 때마다 생성된 trace_id(gen-xxxx)를 순서대로 누적한다.
+    # 이를 통해 워크플로우 ↔ 생성 대화(Q&A)를 별도 테이블 없이 연결한다.
+    generation_trace_ids: Mapped[List[str]] = mapped_column(
+        JSON, default=list, server_default='[]', nullable=False
+    )
+
     # 타임스탬프
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False

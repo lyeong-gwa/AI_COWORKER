@@ -13,6 +13,33 @@ from ..base import NodeHandler, ExecutionContext
 from ..common import render_url_or_header
 
 
+def _api_def_from_snapshot(snap: dict) -> ApiDefinition:
+    """apiSpecSnapshot dict → 세션에 추가하지 않는 transient ApiDefinition.
+
+    이후 카탈로그 구성·실행 코드가 ORM 속성(.url_template 등)을 그대로 사용하도록
+    스냅샷의 camelCase 키를 ORM 컬럼에 매핑한다. 불완전한 스냅샷은 ValueError.
+    """
+    if not isinstance(snap, dict):
+        raise ValueError("apiSpecSnapshots 항목이 올바른 형식이 아닙니다")
+    url_template = snap.get("urlTemplate")
+    if not url_template:
+        raise ValueError("apiSpecSnapshots 항목에 urlTemplate 이 없습니다")
+    return ApiDefinition(
+        id=snap.get("id") or "",
+        name=snap.get("name") or "",
+        description=snap.get("description") or "",
+        method=snap.get("method") or "GET",
+        url_template=url_template,
+        headers=snap.get("headers") or {},
+        body_template=snap.get("bodyTemplate"),
+        auth_type=snap.get("authType") or "none",
+        auth_config=snap.get("authConfig") or {},
+        parameters=snap.get("parameters") or [],
+        response_schema=snap.get("responseSchema") or {},
+        is_active=True,
+    )
+
+
 @NodeHandlerRegistry.register
 class AiApiRouterHandler(NodeHandler):
     node_type = "ai-api-router"
@@ -23,17 +50,25 @@ class AiApiRouterHandler(NodeHandler):
     async def execute(self, node, input_data, ctx: ExecutionContext) -> Any:
         config = node.config
 
-        # 1. Load all active API definitions
-        async with async_session_maker() as api_db:
-            result = await api_db.execute(
-                select(ApiDefinition).where(ApiDefinition.is_active == True)
-            )
-            api_defs = result.scalars().all()
+        snapshots = config.get("apiSpecSnapshots")
 
-        # Filter by selected API IDs (if configured)
-        selected_ids = config.get("apiIds", [])
-        if selected_ids:
-            api_defs = [d for d in api_defs if d.id in selected_ids]
+        # 0. 동결된 스냅샷 우선 (snapshot-first; 라이브 DB 조회 생략)
+        if snapshots is not None:
+            if not isinstance(snapshots, list):
+                raise ValueError("apiSpecSnapshots 가 올바른 형식이 아닙니다")
+            api_defs = [_api_def_from_snapshot(s) for s in snapshots]
+        else:
+            # 1. Load all active API definitions (스냅샷 없을 때 — 마이그레이션 이전 호환)
+            async with async_session_maker() as api_db:
+                result = await api_db.execute(
+                    select(ApiDefinition).where(ApiDefinition.is_active == True)
+                )
+                api_defs = result.scalars().all()
+
+            # Filter by selected API IDs (if configured)
+            selected_ids = config.get("apiIds", [])
+            if selected_ids:
+                api_defs = [d for d in api_defs if d.id in selected_ids]
 
         if not api_defs:
             return {
